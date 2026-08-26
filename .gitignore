@@ -1,0 +1,6 @@
+build*/
+ThirdParty/
+*.build/
+*.pyi
+__pycache__/
+.vscode/

@@ -1,0 +1,84 @@
+// session_protocol.h
+// 一条 P2P 连接(conn_id 由你的P2P模块管理) 上会跑很多条"逻辑会话"
+// (对应浏览器发起的每一条 SOCKS5 连接)。这里定义会话帧格式，
+// 用 stream_id 区分不同的浏览器连接。
+//
+// 帧格式（这就是你调用 send(conn_id, data) 时的 data 内容）：
+//   [stream_id: 4B][type: 1B][payload...]
+#pragma once
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace p2psocks {
+
+    
+enum class FrameType : uint8_t {
+    SYN     = 0x01,  // 请求建立到目标的连接, payload = host_len(1)+host+port(2)
+    SYNACK  = 0x02,  // 连接结果, payload = 1字节状态(0=成功,1=失败)
+    DATA    = 0x03,  // 数据, payload = 原始字节
+    FIN     = 0x04,  // 关闭该会话, payload 为空
+    RST     = 0x05,  // 重置该会话, payload 为空
+};
+
+struct FrameHeader {
+    uint32_t stream_id;
+    FrameType type;
+
+    static constexpr size_t kSize = 5;
+
+    void encode(uint8_t* out) const {
+        uint32_t sid = hton32(stream_id);
+        std::memcpy(out, &sid, 4);
+        out[4] = static_cast<uint8_t>(type);
+    }
+
+    static bool decode(const uint8_t* data, size_t len, FrameHeader& h) {
+        if (len < kSize) return false;
+        uint32_t sid;
+        std::memcpy(&sid, data, 4);
+        h.stream_id = hton32(sid);
+        h.type = static_cast<FrameType>(data[4]);
+        return true;
+    }
+
+    static uint32_t hton32(uint32_t v) {
+        return ((v & 0x000000FFu) << 24) | ((v & 0x0000FF00u) << 8) |
+               ((v & 0x00FF0000u) >> 8) | ((v & 0xFF000000u) >> 24);
+    }
+};
+
+// 拼一个完整帧: header + payload
+inline std::vector<uint8_t> make_frame(uint32_t stream_id, FrameType type,
+                                        const uint8_t* payload = nullptr,
+                                        size_t payload_len = 0) {
+    std::vector<uint8_t> buf(FrameHeader::kSize + payload_len);
+    FrameHeader h{stream_id, type};
+    h.encode(buf.data());
+    if (payload_len)
+        std::memcpy(buf.data() + FrameHeader::kSize, payload, payload_len);
+    return buf;
+}
+
+inline std::vector<uint8_t> encode_syn_payload(const std::string& host,
+                                                uint16_t port) {
+    std::vector<uint8_t> out;
+    out.push_back(static_cast<uint8_t>(host.size()));
+    out.insert(out.end(), host.begin(), host.end());
+    out.push_back(static_cast<uint8_t>(port >> 8));
+    out.push_back(static_cast<uint8_t>(port & 0xFF));
+    return out;
+}
+
+inline bool decode_syn_payload(const uint8_t* data, size_t len,
+                                std::string& host, uint16_t& port) {
+    if (len < 1) return false;
+    uint8_t hlen = data[0];
+    if (len < 1u + hlen + 2u) return false;
+    host.assign(reinterpret_cast<const char*>(data + 1), hlen);
+    port = (static_cast<uint16_t>(data[1 + hlen]) << 8) | data[2 + hlen];
+    return true;
+}
+
+}  // namespace p2psocks
