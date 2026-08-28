@@ -22,8 +22,8 @@ using namespace p2psocks;
 class RemoteSession : public std::enable_shared_from_this<RemoteSession> {
 public:
     RemoteSession(asio::io_context& io, SessionMux& mux,
-                  std::shared_ptr<Session> session,RemoteSessionManager &manager)
-        : io_(io), mux_(mux), session_(std::move(session)), target_socket_(io),manager_(manager) {
+                  std::shared_ptr<Session> session)
+        : io_(io), mux_(mux), session_(std::move(session)), target_socket_(io){
             
         }
 
@@ -31,9 +31,12 @@ public:
         std::cout << "RemoteSession close, stream_id=" << session_->stream_id() << "\n";
     }
 
+    void bind_close_func(std::function<void(uint32_t stream_id)> func) {
+        close_func_ = func;
+    }
+
     void connect_target(const std::string& host, uint16_t port) {
         auto self(shared_from_this());
-        manager_.register_session(session_->stream_id(),shared_from_this());
         auto resolver = std::make_shared<tcp::resolver>(io_);
         resolver->async_resolve(
             host, std::to_string(port),
@@ -112,7 +115,8 @@ private:
         
         if(!is_closed_)
         {
-            manager_.remove_session(session_->stream_id());
+            if(close_func_)
+                close_func_(session_->stream_id());
             is_closed_ = true;
         }
     }
@@ -120,10 +124,10 @@ private:
     asio::io_context& io_;
     SessionMux& mux_;
     std::shared_ptr<Session> session_;
+    std::function<void(uint32_t stream_id)> close_func_;
     tcp::socket target_socket_;
     std::array<uint8_t, 8192> target_buf_{};
     std::deque<std::vector<uint8_t>> to_target_queue_;
-    RemoteSessionManager &manager_;
     bool is_closed_ = false;
 };
 

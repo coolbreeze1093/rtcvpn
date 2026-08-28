@@ -11,20 +11,130 @@ void signal_handler(int signal)
     running = false;
 }
 
+#include <asio.hpp>
+#include <iostream>
+#include <array>
+
+using asio::ip::udp;
+
+class UdpClient: public std::enable_shared_from_this<UdpClient>
+{
+public:
+    UdpClient(asio::io_context& io_context,SessionMux& mux,
+               const std::string& local_host, uint16_t local_port,
+               const std::string& remote_host, uint16_t remote_port,
+               uint32_t stream_id)
+               : socket_(io_context, udp::endpoint(udp::v4(), 0))
+               ,mux_(mux)
+               ,timer_(io_context)
+               ,local_host_(local_host)
+               ,local_port_(local_port)
+               ,remote_host_(remote_host)
+               ,remote_port_(remote_port)
+               ,stream_id_(stream_id)
+               ,recv_buf_(65536)
+    {
+        udp::resolver resolver(io_context);
+        server_endpoint_ = *resolver.resolve(udp::v4(), remote_host_, std::to_string(remote_port_)).begin();
+    }
+    ~UdpClient()
+    {
+        socket_.close();
+    }
+
+    void send(const std::vector<uint8_t>& data)
+    {
+        auto self = shared_from_this();
+        socket_.async_send_to(
+            asio::buffer(data), server_endpoint_,
+            [self](std::error_code ec, std::size_t bytes_sent)
+            {
+                if (ec)
+                {
+                    std::cout << "send error: " << ec.message() << std::endl;
+                    return;
+                }
+                std::cout << "Sent " << bytes_sent << " bytes" << std::endl;
+                self->start_receive();
+            });
+    }
+
+private:
+    void start_receive()
+    {
+        auto self = shared_from_this();
+        timer_.expires_after(std::chrono::seconds(10));
+        timer_.async_wait([self](std::error_code ec)
+        {
+            if (!ec)  // 定时器正常触发(没有被取消),说明超时了
+            {
+                std::cout << "UDP receive timeout, closing. stream_id=" << self->stream_id_ << std::endl;
+                self->socket_.close();  // 这会让 async_receive_from 以 operation_aborted 返回
+            }
+        });
+        socket_.async_receive_from(
+            asio::buffer(recv_buf_), sender_endpoint_,
+            [self](std::error_code ec, std::size_t bytes_recvd)
+            {
+                self->timer_.cancel();
+
+                if (!ec)
+                {
+                    std::vector<uint8_t> reply(self->recv_buf_.begin(), self->recv_buf_.begin() + bytes_recvd);
+                    self->mux_.send_udp_reply(self->stream_id_,
+                                               self->local_host_, self->local_port_,
+                                               self->remote_host_, self->remote_port_,
+                                               reply);
+                    self->start_receive();
+                }
+                else
+                {
+                    std::cout << "receive error: " << ec.message() << std::endl;
+                }
+            });
+    }
+
+    udp::socket socket_;
+    udp::endpoint server_endpoint_;
+    udp::endpoint sender_endpoint_;
+    asio::steady_timer timer_;
+    std::vector<uint8_t> recv_buf_;
+
+    
+    SessionMux& mux_;
+    std::string local_host_;
+    uint16_t local_port_;
+    std::string remote_host_;
+    uint16_t remote_port_;
+    uint32_t stream_id_;
+    
+};
+
 class ProcessNewWsClient
 {
 public:
     ProcessNewWsClient(asio::io_context &io, rtc::Configuration config) : mux_(peer_conn_id), io_(io), config_(config)
     {
-        mux_.set_on_syn([&](std::shared_ptr<Session> session,
+        mux_.set_on_syn([this](std::shared_ptr<Session> session,
                             const std::string &host, uint16_t port)
                         {
             std::cout << "[远端] 收到连接请求 " << host << ":" << port
                       << " (stream_id=" << session->stream_id() << ")\n";
             auto rs = std::make_shared<RemoteSession>(io_, mux_, session, sessions_keepalive_);
             rs->connect_target(host, port); });
-    }
 
+        mux_.set_on_udp([this](uint32_t stream_id,const std::string&local_host, uint16_t local_port,
+                            const std::string&remote_host, uint16_t remote_port,
+                            const std::vector<uint8_t>& data)
+                        {
+                            std::cout << "[远端] 收到UDP数据 " << local_host << ":" << local_port
+                                      << " -> " << remote_host << ":" << remote_port
+                                      << " (stream_id=" << stream_id << ")\n";
+                            auto udp = std::make_shared<UdpClient>(io_, mux_, local_host, local_port, remote_host, remote_port, stream_id);
+                            udp->send(data);
+                        });
+    }
+    //新连接的客户端
     void newClient(std::shared_ptr<rtc::WebSocket> ws)
     {
         UUIDv4::UUIDGenerator<std::mt19937_64> uuidGenerator;
@@ -67,6 +177,8 @@ private:
     std::unordered_map<std::string, std::shared_ptr<p2p_server>> p2p_servers_;
     std::unordered_map<std::string, std::shared_ptr<ws_server>> ws_servers_;
     std::unordered_map<std::string, std::shared_ptr<ProcessSendData>> process_send_datas_;
+
+
 };
 
 int main()

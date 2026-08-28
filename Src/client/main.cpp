@@ -35,9 +35,7 @@ int main(int argc, char *argv[])
         SessionMux mux(peer_conn_id);
 
         ProcessSendData processSendData(&client, mux);
-        mux.set_send_func(std::bind(&ProcessSendData::sendData, &processSendData, std::placeholders::_1, 
-            std::placeholders::_2, std::placeholders::_3));
-
+        
         SocksServer server(io, socks_port, mux);
         
         std::vector<std::thread> io_threads;

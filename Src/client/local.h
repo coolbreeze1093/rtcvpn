@@ -19,14 +19,77 @@ using asio::ip::tcp;
 using namespace p2psocks;
 using asio::ip::udp;
 
-class UdpServer
+class UdpServer : public std::enable_shared_from_this<UdpServer>
 {
 public:
-    UdpServer(asio::io_context &io_context)
-        : socket_(io_context, udp::endpoint(udp::v4(), 0)), recv_buf_(65535)
+    UdpServer(asio::io_context &io_context, SessionMux &mux)
+        : socket_(io_context), recv_buf_(65535), io_(io_context), mux_(mux)
     {
+        session_ = mux_.create_session();
+        session_->set_on_udp([this](const std::string &local_host, uint16_t local_port,
+                                    const std::string &remote_host, uint16_t remote_port,
+                                    const std::vector<uint8_t> &data)
+                             {
+        auto reply = std::make_shared<std::vector<uint8_t>>();
+
+        reply->push_back(0x00); // VER
+        reply->push_back(0x00); // REP
+        reply->push_back(0x00); // RSV
+        reply->push_back(0x01); // ATYP IPv4
+
+        // 简单示例：IPv4
+        asio::ip::address_v4 addr =
+            asio::ip::make_address_v4(local_host);
+
+        auto bytes = addr.to_bytes();
+
+        reply->insert(reply->end(),
+                      bytes.begin(),
+                      bytes.end());
+
+        reply->push_back((local_port >> 8) & 0xff);
+        reply->push_back(local_port & 0xff);
+
+        do_send_to_client(reply, remote_host, remote_port); });
+    }
+
+    ~UdpServer()
+    {
+        std::cout << "UdpServer destroyed" << std::endl;
+        mux_.remove_session(session_->stream_id());
+    }
+
+    void close()
+    {
+        socket_.close();
+    }
+
+    bool start()
+    {
+        asio::error_code ec;
+
+        socket_.open(udp::v4(), ec);
+        if (ec)
+        {
+            std::cout
+                << "open failed:"
+                << ec.message()
+                << std::endl;
+            return false;
+        }
+        socket_.bind(udp::endpoint(udp::v4(), 0), ec);
+        if (ec)
+        {
+            std::cout
+                << "bind failed:"
+                << ec.message()
+                << std::endl;
+            return false;
+        }
         std::cout << "UDP server listening on port " << socket_.local_endpoint().port() << std::endl;
+
         start_receive();
+        return true;
     }
 
     int getLocalPort()
@@ -34,27 +97,49 @@ public:
         return socket_.local_endpoint().port();
     }
 
+    std::string get_local_ip()
+    {
+        asio::ip::udp::socket sock(io_);
+
+        sock.open(asio::ip::udp::v4());
+
+        sock.connect(
+            asio::ip::udp::endpoint(
+                asio::ip::make_address("114.114.114.114"),
+                53));
+
+        return sock.local_endpoint()
+            .address()
+            .to_string();
+    }
+
 private:
     void start_receive()
     {
+        auto self(shared_from_this());
         socket_.async_receive_from(
             asio::buffer(recv_buf_), remote_endpoint_,
-            [this](std::error_code ec, std::size_t bytes_recvd)
+            [this, self](std::error_code ec, std::size_t bytes_recvd)
             {
                 if (!ec && bytes_recvd > 0)
                 {
-                    std::string msg(recv_buf_.data(), bytes_recvd);
-                    std::cout << "Received from "
-                              << remote_endpoint_.address().to_string()
-                              << ":" << remote_endpoint_.port()
-                              << " -> " << msg << std::endl;
-
-                    // 原样回显
-                    do_send(bytes_recvd);
+                    if (recv_buf_[3] == 0x01)
+                    {
+                        // 处理 IPv4 连接
+                        send_ipv4(bytes_recvd, remote_endpoint_.address().to_string(), remote_endpoint_.port());
+                    }
+                    else if (recv_buf_[3] == 0x03)
+                    {
+                        send_domain(bytes_recvd, remote_endpoint_.address().to_string(), remote_endpoint_.port());
+                    }
+                    else
+                    {
+                    }
                 }
                 else if (ec)
                 {
                     std::cout << "receive error: " << ec.message() << std::endl;
+                    return;
                 }
 
                 // 继续监听下一个包
@@ -62,35 +147,72 @@ private:
             });
     }
 
-    void do_send(std::size_t length)
+    void send_ipv4(std::size_t bytes_recvd, const std::string& local_host, uint16_t local_port)
     {
-        // 注意：remote_endpoint_ 在下一次 start_receive 之前是有效的
-        // 但如果 do_send 是异步的，要小心 remote_endpoint_ 被下一次接收覆盖
-        // 这里为了安全，拷贝一份 endpoint
-        auto endpoint_copy = remote_endpoint_;
+        char tmp[32];
+        std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", recv_buf_[4], recv_buf_[5],
+                      recv_buf_[6], recv_buf_[7]);
+        std::string target_host = tmp;
+        int target_port = (uint16_t(recv_buf_[8]) << 8) | recv_buf_[9];
+        std::vector<uint8_t> data(recv_buf_.begin() + 10, recv_buf_.begin() + bytes_recvd);
+
+        mux_.send_udp(session_->stream_id(), local_host, local_port, target_host, target_port, data);
+    }
+
+    void send_domain(std::size_t bytes_recvd, const std::string& local_host, uint16_t local_port)
+    {
+        int len = recv_buf_[4];
+        std::string target_host(recv_buf_.begin() + 5, recv_buf_.begin() + 5 + len);
+        int target_port = (uint16_t(recv_buf_[6 + len]) << 8) | recv_buf_[7 + len];
+        std::vector<uint8_t> data(recv_buf_.begin() + 8 + len, recv_buf_.begin() + bytes_recvd);
+
+        mux_.send_udp(session_->stream_id(), local_host, local_port, target_host, target_port, data);
+    }
+
+    void do_send_to_client(std::shared_ptr<std::vector<uint8_t>> data, const std::string& target_host, int target_port)
+    {
+        auto target_endpoint = asio::ip::udp::endpoint(
+            asio::ip::make_address(target_host),
+            target_port);
+
         socket_.async_send_to(
-            asio::buffer(recv_buf_, length), endpoint_copy,
-            [this](std::error_code ec, std::size_t /*bytes_sent*/)
+            asio::buffer(*data),
+            target_endpoint,
+            [this](std::error_code ec, std::size_t bytes_sent)
             {
                 if (ec)
                 {
-                    std::cout << "send error: " << ec.message() << std::endl;
+                    std::cout << "send error: "
+                              << ec.message()
+                              << std::endl;
                 }
             });
     }
 
     udp::socket socket_;
     udp::endpoint remote_endpoint_;
-    std::vector<char> recv_buf_;
+    std::vector<uint8_t> recv_buf_;
+    asio::io_context &io_;
+    std::shared_ptr<Session> session_;
+    SessionMux &mux_;
 };
 
 class ClientSession : public std::enable_shared_from_this<ClientSession>
 {
 public:
-    ClientSession(tcp::socket socket, SessionMux &mux)
-        : socket_(std::move(socket)), mux_(mux) {}
+    ClientSession(asio::io_context &io, tcp::socket socket, SessionMux &mux)
+        : socket_(std::move(socket)), mux_(mux), io_(io) {}
 
     void start() { do_read_greeting(); }
+
+    ~ClientSession()
+    {
+        std::cout << "ClientSession destroyed" << std::endl;
+        if (udp_session_)
+        {
+            udp_session_->close();
+        }
+    }
 
 private:
     asio::streambuf request_buf_;
@@ -316,16 +438,38 @@ private:
                               buf_[2], buf_[3]);
                 target_host_ = tmp;
                 target_port_ = (uint16_t(buf_[4]) << 8) | buf_[5];
-                request_remote_connect();
+                request_remote_connect_for_udp();
             });
     }
 
-    void read_ipv4() {
+    void request_remote_connect_for_udp()
+    {
+        if (!udp_session_)
+        {
+            udp_session_ = std::make_shared<UdpServer>(io_, mux_);
+            if (!udp_session_->start())
+            {
+                send_socks_reply(0x01);
+                return;
+            }
+            do_read_from_client_for_udp();
+        }
+
+        send_udp_reply(udp_session_->get_local_ip(), udp_session_->getLocalPort());
+    }
+
+    void read_ipv4()
+    {
         auto self(shared_from_this());
         asio::async_read(
             socket_, asio::buffer(buf_, 6),
-            [this, self](std::error_code ec, std::size_t) {
-                if (ec) return;
+            [this, self](std::error_code ec, std::size_t)
+            {
+                if (ec)
+                {
+                    print_error("read ipv4 error");
+                    return;
+                }
                 char tmp[32];
                 std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", buf_[0], buf_[1],
                               buf_[2], buf_[3]);
@@ -407,6 +551,41 @@ private:
             });
     }
 
+    void send_udp_reply(const std::string &host, int port)
+    {
+        auto self(shared_from_this());
+        auto reply = std::make_shared<std::vector<uint8_t>>();
+
+        reply->push_back(0x05); // VER
+        reply->push_back(0x00); // REP
+        reply->push_back(0x00); // RSV
+        reply->push_back(0x01); // ATYP IPv4
+
+        // 简单示例：IPv4
+        asio::ip::address_v4 addr =
+            asio::ip::make_address_v4(host);
+
+        auto bytes = addr.to_bytes();
+
+        reply->insert(reply->end(),
+                      bytes.begin(),
+                      bytes.end());
+
+        reply->push_back((port >> 8) & 0xff);
+        reply->push_back(port & 0xff);
+
+        asio::async_write(
+            socket_, asio::buffer(*reply),
+            [this, self](std::error_code ec, std::size_t)
+            {
+                if (ec)
+                {
+                    print_error("write udp reply error");
+                    return;
+                }
+            });
+    }
+
     // -------- 浏览器 -> P2P隧道 --------
     void do_read_from_client()
     {
@@ -423,6 +602,22 @@ private:
                 }
                 mux_.send_data(session_->stream_id(), client_buf_.data(), n);
                 do_read_from_client();
+            });
+    }
+
+    void do_read_from_client_for_udp()
+    {
+        auto self(shared_from_this());
+        socket_.async_read_some(
+            asio::buffer(client_buf_),
+            [this, self](std::error_code ec, std::size_t n)
+            {
+                if (ec)
+                {
+                    // print_error("read client error");
+                    return;
+                }
+                do_read_from_client_for_udp();
             });
     }
 
@@ -459,13 +654,16 @@ private:
     std::string target_host_;
     uint16_t target_port_ = 0;
     std::shared_ptr<Session> session_;
+    std::shared_ptr<UdpServer> udp_session_;
+
+    asio::io_context &io_;
 };
 
 class SocksServer
 {
 public:
     SocksServer(asio::io_context &io, uint16_t port, SessionMux &mux)
-        : acceptor_(io, tcp::endpoint(tcp::v4(), port)), mux_(mux)
+        : acceptor_(io, tcp::endpoint(tcp::v4(), port)), mux_(mux), io_(io)
     {
         std::cout << "[本地] SOCKS5 入口已启动，监听端口 " << port << "\n";
         do_accept();
@@ -477,10 +675,11 @@ private:
         acceptor_.async_accept([this](std::error_code ec, tcp::socket socket)
                                {
             if (!ec) {
-                std::make_shared<ClientSession>(std::move(socket), mux_)->start();
+                std::make_shared<ClientSession>(io_, std::move(socket), mux_)->start();
             }
             do_accept(); });
     }
     tcp::acceptor acceptor_;
     SessionMux &mux_;
+    asio::io_context &io_;
 };
