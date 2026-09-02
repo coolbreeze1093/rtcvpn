@@ -12,7 +12,6 @@
 #include <iostream>
 #include <memory>
 #include "session_mux.h"
-#include "remote_session_manager.h"
 #include <array>
 
 using asio::ip::tcp;
