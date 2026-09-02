@@ -2,8 +2,6 @@
 #include "session_mux.h"
 #include "process_send_data.h"
 #include "remote.h"
-#include "remote_session_manager.h"
-#include "p2p_server_manager.h"
 
 std::atomic<bool> running{true};
 void signal_handler(int signal)
@@ -11,103 +9,36 @@ void signal_handler(int signal)
     running = false;
 }
 
-#include <asio.hpp>
-#include <iostream>
-#include <array>
-
-using asio::ip::udp;
-
-class UdpClient: public std::enable_shared_from_this<UdpClient>
+class SessionManager
 {
 public:
-    UdpClient(asio::io_context& io_context,SessionMux& mux,
-               const std::string& local_host, uint16_t local_port,
-               const std::string& remote_host, uint16_t remote_port,
-               uint32_t stream_id)
-               : socket_(io_context, udp::endpoint(udp::v4(), 0))
-               ,mux_(mux)
-               ,timer_(io_context)
-               ,local_host_(local_host)
-               ,local_port_(local_port)
-               ,remote_host_(remote_host)
-               ,remote_port_(remote_port)
-               ,stream_id_(stream_id)
-               ,recv_buf_(65536)
+    SessionManager() = default;
+    ~SessionManager() = default;
+    uint32_t create_session_id() { 
+        if(id_>65535)
+            id_ = 0;
+        return ++id_;
+     }
+    void register_tcp_session(std::shared_ptr<RemoteSession> s)
     {
-        udp::resolver resolver(io_context);
-        server_endpoint_ = *resolver.resolve(udp::v4(), remote_host_, std::to_string(remote_port_)).begin();
+        uint32_t id = create_session_id();
+        sessions_[id] = s;
+        s->set_session_id(id);
     }
-    ~UdpClient()
-    {
-        socket_.close();
-    }
+    void remove_tcp_session(uint32_t stream_id) { sessions_.erase(stream_id); }
 
-    void send(const std::vector<uint8_t>& data)
+    void register_udp_session(std::shared_ptr<UdpClient> s)
     {
-        auto self = shared_from_this();
-        socket_.async_send_to(
-            asio::buffer(data), server_endpoint_,
-            [self](std::error_code ec, std::size_t bytes_sent)
-            {
-                if (ec)
-                {
-                    std::cout << "send error: " << ec.message() << std::endl;
-                    return;
-                }
-                std::cout << "Sent " << bytes_sent << " bytes" << std::endl;
-                self->start_receive();
-            });
+        uint32_t id = create_session_id();
+        udp_sessions_[id] = s;
+        s->set_session_id(id);
     }
+    void remove_udp_session(uint32_t stream_id) { udp_sessions_.erase(stream_id); }
 
 private:
-    void start_receive()
-    {
-        auto self = shared_from_this();
-        timer_.expires_after(std::chrono::seconds(10));
-        timer_.async_wait([self](std::error_code ec)
-        {
-            if (!ec)  // 定时器正常触发(没有被取消),说明超时了
-            {
-                std::cout << "UDP receive timeout, closing. stream_id=" << self->stream_id_ << std::endl;
-                self->socket_.close();  // 这会让 async_receive_from 以 operation_aborted 返回
-            }
-        });
-        socket_.async_receive_from(
-            asio::buffer(recv_buf_), sender_endpoint_,
-            [self](std::error_code ec, std::size_t bytes_recvd)
-            {
-                self->timer_.cancel();
-
-                if (!ec)
-                {
-                    std::vector<uint8_t> reply(self->recv_buf_.begin(), self->recv_buf_.begin() + bytes_recvd);
-                    self->mux_.send_udp_reply(self->stream_id_,
-                                               self->local_host_, self->local_port_,
-                                               self->remote_host_, self->remote_port_,
-                                               reply);
-                    self->start_receive();
-                }
-                else
-                {
-                    std::cout << "receive error: " << ec.message() << std::endl;
-                }
-            });
-    }
-
-    udp::socket socket_;
-    udp::endpoint server_endpoint_;
-    udp::endpoint sender_endpoint_;
-    asio::steady_timer timer_;
-    std::vector<uint8_t> recv_buf_;
-
-    
-    SessionMux& mux_;
-    std::string local_host_;
-    uint16_t local_port_;
-    std::string remote_host_;
-    uint16_t remote_port_;
-    uint32_t stream_id_;
-    
+    std::unordered_map<uint32_t, std::shared_ptr<RemoteSession>> sessions_;
+    std::unordered_map<uint32_t, std::shared_ptr<UdpClient>> udp_sessions_;
+    uint32_t id_ = 0;
 };
 
 class ProcessNewWsClient
@@ -115,70 +46,79 @@ class ProcessNewWsClient
 public:
     ProcessNewWsClient(asio::io_context &io, rtc::Configuration config) : mux_(peer_conn_id), io_(io), config_(config)
     {
-        mux_.set_on_syn([this](std::shared_ptr<Session> session,
-                            const std::string &host, uint16_t port)
+        mux_.set_on_syn([this](uint32_t session_id,
+                               const std::string &host, uint16_t port)
                         {
             std::cout << "[远端] 收到连接请求 " << host << ":" << port
-                      << " (stream_id=" << session->stream_id() << ")\n";
-            auto rs = std::make_shared<RemoteSession>(io_, mux_, session, sessions_keepalive_);
+                      << " (stream_id=" << session_id << ")\n";
+            auto rs = std::make_shared<RemoteSession>(io_, mux_, session_id);
+            sessions_Manager_.register_tcp_session(rs);
+            rs->bind_close_func([this](uint32_t session_id)
+                                  {
+                                      sessions_Manager_.remove_tcp_session(session_id);
+                                  });
+            
             rs->connect_target(host, port); });
 
-        mux_.set_on_udp([this](uint32_t stream_id,const std::string&local_host, uint16_t local_port,
-                            const std::string&remote_host, uint16_t remote_port,
-                            const std::vector<uint8_t>& data)
-                        {
-                            std::cout << "[远端] 收到UDP数据 " << local_host << ":" << local_port
-                                      << " -> " << remote_host << ":" << remote_port
-                                      << " (stream_id=" << stream_id << ")\n";
-                            auto udp = std::make_shared<UdpClient>(io_, mux_, local_host, local_port, remote_host, remote_port, stream_id);
-                            udp->send(data);
-                        });
+        mux_.set_on_udp_syn([this](uint32_t session_id)
+                            {
+                            std::cout << "[远端] 收到UDP数据 " 
+                                      << " (stream_id=" << session_id << ")\n";
+                            auto udp = std::make_shared<UdpClient>(io_, mux_, session_id);
+                            sessions_Manager_.register_udp_session(udp);
+                            udp->bind_close_func([this](uint32_t session_id)
+                                  {
+                                      sessions_Manager_.remove_udp_session(session_id);
+                                  });
+                            udp->start(); });
     }
-    //新连接的客户端
+    // 新连接的客户端
     void newClient(std::shared_ptr<rtc::WebSocket> ws)
     {
-        UUIDv4::UUIDGenerator<std::mt19937_64> uuidGenerator;
-        UUIDv4::UUID uuid = uuidGenerator.getUUID();
-        std::string uuid_str = uuid.bytes();
-
-        auto ws_s = std::make_shared<ws_server>(uuid_str);
-        ws_servers_[uuid_str] = ws_s;
-        ws_s->bindLoginSuccess([this](std::string uuid)
+        uint32_t id = create_session_id();
+        auto ws_s = std::make_shared<ws_server>(id);
+        ws_servers_[id] = ws_s;
+        ws_s->bindLoginSuccess([this](uint32_t session_id)
                                {
-                                std::shared_ptr<ws_server> ws_s = ws_servers_[uuid];
-                          auto p2p_s = std::make_shared<p2p_server>(uuid);  
+                                std::shared_ptr<ws_server> ws_s = ws_servers_[session_id];
+                          auto p2p_s = std::make_shared<p2p_server>(session_id);  
                             p2p_s->init(this->config_);
                             p2p_s->bindWsSend(std::bind(&ws_server::send,ws_s,std::placeholders::_1));
                             ws_s->bindsetRemoteDescriptionFunc(std::bind(&p2p_server::setRemoteDescription,p2p_s,std::placeholders::_1,std::placeholders::_2));
                             ws_s->bindaddRemoteCandidateFunc(std::bind(&p2p_server::addRemoteCandidate,p2p_s,std::placeholders::_1,std::placeholders::_2));
-                            ws_s->bindCloseFunc([this](std::string uuid){
-                                ws_servers_.erase(uuid);
-                                std::cout<<"ws_server::~ws_server()  "<<uuid<<std::endl;
+                            ws_s->bindCloseFunc([this](uint32_t session_id){
+                                ws_servers_.erase(session_id);
+                                std::cout<<"ws_server::~ws_server()  "<<session_id<<std::endl;
                             });
-                            p2p_servers_[uuid] = p2p_s;
-                            process_send_datas_[uuid] = std::make_shared<ProcessSendData>(p2p_s, this->mux_);
-                            p2p_s->bindCloseFunc([this](std::string uuid){
-                                process_send_datas_.erase(uuid);
-                                p2p_servers_.erase(uuid);
-                                std::cout<<"p2p_server::~p2p_server()  "<<uuid<<std::endl;
+                            p2p_servers_[session_id] = p2p_s;
+                            process_send_datas_[session_id] = std::make_shared<ProcessSendData>(p2p_s, this->mux_);
+                            p2p_s->bindCloseFunc([this](uint32_t session_id){
+                                process_send_datas_.erase(session_id);
+                                p2p_servers_.erase(session_id);
+                                std::cout<<"p2p_server::~p2p_server()  "<<session_id<<std::endl;
                             }); });
         ws_s->connect(ws);
-        std::cout << "newClient  " << uuid_str << std::endl;
+        std::cout << "newClient  " << id << std::endl;
     }
 
+    uint32_t create_session_id() { 
+        if(id_>65535)
+            id_ = 0;
+        return ++id_;
+     }
+
 private:
-    RemoteSessionManager sessions_keepalive_;
+    SessionManager sessions_Manager_;
     uint32_t peer_conn_id = 1; // 占位，换成你的真实值
     SessionMux mux_;
-    p2pServerManager registerServer_;
     asio::io_context &io_;
     rtc::Configuration config_;
 
-    std::unordered_map<std::string, std::shared_ptr<p2p_server>> p2p_servers_;
-    std::unordered_map<std::string, std::shared_ptr<ws_server>> ws_servers_;
-    std::unordered_map<std::string, std::shared_ptr<ProcessSendData>> process_send_datas_;
+    std::unordered_map<uint32_t, std::shared_ptr<p2p_server>> p2p_servers_;
+    std::unordered_map<uint32_t, std::shared_ptr<ws_server>> ws_servers_;
+    std::unordered_map<uint32_t, std::shared_ptr<ProcessSendData>> process_send_datas_;
 
-
+    uint32_t id_ = 0;
 };
 
 int main()

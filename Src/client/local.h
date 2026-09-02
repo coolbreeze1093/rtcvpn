@@ -21,46 +21,21 @@ using asio::ip::udp;
 
 class UdpServer : public std::enable_shared_from_this<UdpServer>
 {
+
 public:
-    UdpServer(asio::io_context &io_context, SessionMux &mux)
-        : socket_(io_context), recv_buf_(65535), io_(io_context), mux_(mux)
+    UdpServer(asio::io_context &io_context, SessionMux &mux, std::shared_ptr<Session> session)
+        : io_(io_context), mux_(mux), session_(session), recv_buf_(65535), socket_(io_context)
     {
-        session_ = mux_.create_session();
-        session_->set_on_udp([this](const std::string &local_host, uint16_t local_port,
-                                    const std::string &remote_host, uint16_t remote_port,
-                                    const std::vector<uint8_t> &data)
-                             {
-        auto reply = std::make_shared<std::vector<uint8_t>>();
-
-        reply->push_back(0x00); // VER
-        reply->push_back(0x00); // REP
-        reply->push_back(0x00); // RSV
-        reply->push_back(0x01); // ATYP IPv4
-
-        // 简单示例：IPv4
-        asio::ip::address_v4 addr =
-            asio::ip::make_address_v4(local_host);
-
-        auto bytes = addr.to_bytes();
-
-        reply->insert(reply->end(),
-                      bytes.begin(),
-                      bytes.end());
-
-        reply->push_back((local_port >> 8) & 0xff);
-        reply->push_back(local_port & 0xff);
-
-        do_send_to_client(reply, remote_host, remote_port); });
     }
 
     ~UdpServer()
     {
         std::cout << "UdpServer destroyed" << std::endl;
-        mux_.remove_session(session_->stream_id());
     }
 
     void close()
     {
+        std::cout << "UdpServer close" << std::endl;
         socket_.close();
     }
 
@@ -86,7 +61,44 @@ public:
                 << std::endl;
             return false;
         }
+
         std::cout << "UDP server listening on port " << socket_.local_endpoint().port() << std::endl;
+
+        // 回给客户端的数据
+        std::weak_ptr<UdpServer> weak_self = shared_from_this();
+
+        session_->set_on_udp_data([weak_self](const std::string &host, uint16_t port,
+                                              std::shared_ptr<std::vector<uint8_t>> data)
+                                  {
+        if (weak_self.expired())
+        {
+            std::cout << "UdpServer expired" << std::endl;
+            return;
+        }
+        auto self = weak_self.lock();
+        auto reply = std::make_shared<std::vector<uint8_t>>();
+
+        reply->push_back(0x00); // RSV (high byte)
+        reply->push_back(0x00); // RSV (low byte)
+        reply->push_back(0x00); // FRAG
+        reply->push_back(0x01); // ATYP IPv4
+
+        // 简单示例：IPv4
+        asio::ip::address_v4 addr =
+            asio::ip::make_address_v4(host);
+
+        auto bytes = addr.to_bytes();
+
+        reply->insert(reply->end(),
+                      bytes.begin(),
+                      bytes.end());
+
+        reply->push_back((port >> 8) & 0xff);
+        reply->push_back(port & 0xff);
+
+        reply->insert(reply->end(), data->begin(), data->end());
+        
+        self->send(reply); });
 
         start_receive();
         return true;
@@ -100,7 +112,6 @@ public:
     std::string get_local_ip()
     {
         asio::ip::udp::socket sock(io_);
-
         sock.open(asio::ip::udp::v4());
 
         sock.connect(
@@ -108,9 +119,7 @@ public:
                 asio::ip::make_address("114.114.114.114"),
                 53));
 
-        return sock.local_endpoint()
-            .address()
-            .to_string();
+        return sock.local_endpoint().address().to_string();
     }
 
 private:
@@ -119,36 +128,66 @@ private:
         auto self(shared_from_this());
         socket_.async_receive_from(
             asio::buffer(recv_buf_), remote_endpoint_,
-            [this, self](std::error_code ec, std::size_t bytes_recvd)
+            [self](std::error_code ec, std::size_t bytes_recvd)
             {
-                if (!ec && bytes_recvd > 0)
-                {
-                    if (recv_buf_[3] == 0x01)
-                    {
-                        // 处理 IPv4 连接
-                        send_ipv4(bytes_recvd, remote_endpoint_.address().to_string(), remote_endpoint_.port());
-                    }
-                    else if (recv_buf_[3] == 0x03)
-                    {
-                        send_domain(bytes_recvd, remote_endpoint_.address().to_string(), remote_endpoint_.port());
-                    }
-                    else
-                    {
-                    }
-                }
-                else if (ec)
+                if (ec)
                 {
                     std::cout << "receive error: " << ec.message() << std::endl;
                     return;
                 }
 
+                if (bytes_recvd <= 0)
+                {
+                    std::cout << "invalid packet" << std::endl;
+                    return;
+                }
+
+                if (!self->client_known_)
+                {
+                    // 第一次收到包,记录这个客户端地址
+                    self->client_endpoint_ = self->remote_endpoint_;
+                    self->client_known_ = true;
+                    std::cout << "first packet, record client endpoint" << self->client_endpoint_.address().to_string() << ":" << self->client_endpoint_.port() << std::endl;
+                }
+                else if (self->remote_endpoint_.address() != self->client_endpoint_.address())
+                {
+                    // 源 IP 不一致,按协议要求丢弃(防止伪造)
+                    std::cout << "source ip changed, reject packet" << std::endl;
+                    self->start_receive();
+                    return;
+                }
+                else if (self->remote_endpoint_.port() != self->client_endpoint_.port())
+                {
+                    // 端口变了但 IP 一致,按你的策略选择更新还是拒绝
+                    std::cout << "port changed, update client endpoint" << std::endl;
+                    self->client_endpoint_ = self->remote_endpoint_; // 选择宽松处理:更新端口
+                }
+
+                if (self->recv_buf_[3] == 0x01)
+                {
+                    // 处理 IPv4 连接
+                    self->send_ipv4(bytes_recvd, self->remote_endpoint_.address().to_string(), self->remote_endpoint_.port());
+                }
+                else if (self->recv_buf_[3] == 0x03)
+                {
+                    self->send_domain(bytes_recvd, self->remote_endpoint_.address().to_string(), self->remote_endpoint_.port());
+                }
+                else
+                {
+                    std::cout << "invalid network type" << std::endl;
+                }
                 // 继续监听下一个包
-                start_receive();
+                self->start_receive();
             });
     }
 
-    void send_ipv4(std::size_t bytes_recvd, const std::string& local_host, uint16_t local_port)
+    void send_ipv4(std::size_t bytes_recvd, const std::string &local_host, uint16_t local_port)
     {
+        if (bytes_recvd < 10)
+        {
+            std::cout << "invalid ipv4 packet" << std::endl;
+            return;
+        }
         char tmp[32];
         std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", recv_buf_[4], recv_buf_[5],
                       recv_buf_[6], recv_buf_[7]);
@@ -156,52 +195,91 @@ private:
         int target_port = (uint16_t(recv_buf_[8]) << 8) | recv_buf_[9];
         std::vector<uint8_t> data(recv_buf_.begin() + 10, recv_buf_.begin() + bytes_recvd);
 
-        mux_.send_udp(session_->stream_id(), local_host, local_port, target_host, target_port, data);
+        mux_.send_udp(session_->stream_id(), target_host, target_port, data);
     }
 
-    void send_domain(std::size_t bytes_recvd, const std::string& local_host, uint16_t local_port)
+    void send_domain(std::size_t bytes_recvd, const std::string &local_host, uint16_t local_port)
     {
+        if (bytes_recvd < 5)
+        {
+            std::cout << "invalid domain packet" << std::endl;
+            return;
+        }
         int len = recv_buf_[4];
+        if (5 + len + 2 > (int)bytes_recvd)
+        {
+            std::cout << "invalid domain packet 2" << std::endl;
+            return;
+        }
+
         std::string target_host(recv_buf_.begin() + 5, recv_buf_.begin() + 5 + len);
         int target_port = (uint16_t(recv_buf_[6 + len]) << 8) | recv_buf_[7 + len];
         std::vector<uint8_t> data(recv_buf_.begin() + 8 + len, recv_buf_.begin() + bytes_recvd);
 
-        mux_.send_udp(session_->stream_id(), local_host, local_port, target_host, target_port, data);
+        mux_.send_udp(session_->stream_id(), target_host, target_port, data);
+    }
+    // 发送回客户端
+    void send(std::shared_ptr<std::vector<uint8_t>> data)
+    {
+        send_queue_.push_back(std::move(data));
+        if (!sending_)
+        {
+            do_send_next();
+            sending_ = true;
+        }
     }
 
-    void do_send_to_client(std::shared_ptr<std::vector<uint8_t>> data, const std::string& target_host, int target_port)
+    void do_send_next()
     {
-        auto target_endpoint = asio::ip::udp::endpoint(
-            asio::ip::make_address(target_host),
-            target_port);
-
+        auto data = send_queue_.front();
+        /*auto target_endpoint = asio::ip::udp::endpoint(
+            asio::ip::make_address(send_data.target_host),
+            send_data.target_port);*/
+        auto self = shared_from_this();
         socket_.async_send_to(
             asio::buffer(*data),
-            target_endpoint,
-            [this](std::error_code ec, std::size_t bytes_sent)
+            client_endpoint_,
+            [self](std::error_code ec, std::size_t bytes_sent)
             {
                 if (ec)
                 {
                     std::cout << "send error: "
                               << ec.message()
                               << std::endl;
+                    return;
+                }
+                self->send_queue_.pop_front();
+                if (!self->send_queue_.empty())
+                {
+                    self->do_send_next();
+                }
+                else
+                {
+                    self->sending_ = false;
                 }
             });
     }
 
+    asio::io_context &io_;
+    SessionMux &mux_;
+    std::shared_ptr<Session> session_;
+    std::vector<uint8_t> recv_buf_;
     udp::socket socket_;
     udp::endpoint remote_endpoint_;
-    std::vector<uint8_t> recv_buf_;
-    asio::io_context &io_;
-    std::shared_ptr<Session> session_;
-    SessionMux &mux_;
+    udp::endpoint client_endpoint_;
+    std::deque<std::shared_ptr<std::vector<uint8_t>>> send_queue_;
+    bool sending_ = false;
+    bool client_known_ = false;
 };
 
 class ClientSession : public std::enable_shared_from_this<ClientSession>
 {
 public:
     ClientSession(asio::io_context &io, tcp::socket socket, SessionMux &mux)
-        : socket_(std::move(socket)), mux_(mux), io_(io) {}
+        : socket_(std::move(socket)), mux_(mux), io_(io)
+    {
+        std::cout << "ClientSession created" << std::endl;
+    }
 
     void start() { do_read_greeting(); }
 
@@ -212,7 +290,18 @@ public:
         {
             udp_session_->close();
         }
+        if (session_)
+        {
+            mux_.remove_session(session_->stream_id());
+        }
     }
+
+    void set_on_close(std::function<void(uint32_t)> on_close)
+    {
+        this->on_close_ = std::move(on_close);
+    }
+
+    void set_client_id(uint32_t id) { id_ = id; }
 
 private:
     asio::streambuf request_buf_;
@@ -228,6 +317,7 @@ private:
                 if (ec)
                 {
                     print_error("read greeting error");
+                    self->close();
                     return;
                 }
                 // -------- 标准 SOCKS5 握手 --------
@@ -241,6 +331,7 @@ private:
                             if (ec)
                             {
                                 print_error("read methods error");
+                                self->close();
                                 return;
                             }
                             static const uint8_t reply[2] = {0x05, 0x00};
@@ -251,6 +342,7 @@ private:
                                     if (ec)
                                     {
                                         print_error("write reply error");
+                                        self->close();
                                         return;
                                     }
                                     do_read_request();
@@ -279,6 +371,7 @@ private:
                 if (ec)
                 {
                     print_error("read http request line error");
+                    self->close();
                     return;
                 }
 
@@ -300,6 +393,7 @@ private:
                     if (pos == std::string::npos)
                     {
                         std::cout << "invalid CONNECT target: " << uri << std::endl;
+                        self->close();
                         return;
                     }
                     std::string http_host = uri.substr(0, pos);
@@ -317,6 +411,7 @@ private:
                     // 普通 HTTP 请求（GET/POST等），需要从 URI 或 Host 头解析目标
                     // 这里简单示例：仅处理 CONNECT，其他方法先给出提示
                     print_error("plain http method not implemented: " + method);
+                    self->close();
                     // 也可以按需实现明文 HTTP 转发
                 }
             });
@@ -334,6 +429,7 @@ private:
                 if (ec)
                 {
                     print_error("read http headers error");
+                    self->close();
                     return;
                 }
                 // request_buf_ 中此时已包含全部头部，直接丢弃（consume）
@@ -342,7 +438,7 @@ private:
             });
     }
 
-    void do_connect_upstream_and_tunnel(bool ok)
+    void do_connect_upstream_and_tunnel_for_http(bool ok)
     {
         auto self(shared_from_this());
 
@@ -355,6 +451,7 @@ private:
                 if (ec)
                 {
                     print_error("write 200 reply error");
+                    self->close();
                     return;
                 }
                 do_read_from_client();
@@ -364,18 +461,37 @@ private:
     void request_remote_connect_for_http()
     {
         session_ = mux_.create_session();
-        auto self(shared_from_this());
-        session_->set_on_data([this, self](const uint8_t *d, size_t n)
+        std::weak_ptr<ClientSession> weak_self = shared_from_this();
+        session_->set_on_data([weak_self](const uint8_t *d, size_t n)
                               {
-            bool writing = !write_queue_.empty();
-            write_queue_.emplace_back(d, d + n);
-            if (!writing) do_write_to_client(); });
-        session_->set_on_synack([this, self](bool ok)
-                                { do_connect_upstream_and_tunnel(ok); });
-        session_->set_on_close([this, self]()
+                                if (weak_self.expired())
+                                {
+                                    std::cout << "ClientSession expired" << std::endl;
+                                    return;
+                                }
+                                auto self = weak_self.lock();
+            bool writing = !self->write_queue_.empty();
+            self->write_queue_.emplace_back(d, d + n);
+            if (!writing) self->do_write_to_client(); });
+        session_->set_on_synack([weak_self](bool ok)
+                                {
+                                    if (weak_self.expired())
+                                    {
+                                        std::cout << "ClientSession expired" << std::endl;
+                                        return;
+                                    }
+                                    auto self = weak_self.lock();
+                                    self->do_connect_upstream_and_tunnel_for_http(ok); });
+        session_->set_on_close([weak_self]()
                                {
-            std::error_code ec;
-            socket_.close(ec); });
+                                    if (weak_self.expired())
+                                    {
+                                        std::cout << "ClientSession expired" << std::endl;
+                                        return;
+                                    }
+                                    auto self = weak_self.lock();
+                                    std::error_code ec;
+                                    self->socket_.close(ec); });
 
         std::cout << "new http connect request " << target_host_ << ":"
                   << target_port_ << " (stream_id=" << session_->stream_id()
@@ -388,34 +504,35 @@ private:
         auto self(shared_from_this());
         asio::async_read(
             socket_, asio::buffer(buf_, 4),
-            [this, self](std::error_code ec, std::size_t)
+            [self](std::error_code ec, std::size_t)
             {
                 if (ec)
                 {
-                    print_error("read request error");
+                    self->print_error("read request error");
+                    self->close();
                     return;
                 }
-                uint8_t cmd = buf_[1];
-                uint8_t atyp = buf_[3];
+                uint8_t cmd = self->buf_[1];
+                uint8_t atyp = self->buf_[3];
                 if (cmd == 0x01)
                 {
                     if (atyp == 0x01)
-                        read_ipv4();
+                        self->read_ipv4();
                     else if (atyp == 0x03)
-                        read_domain();
+                        self->read_domain();
                     else
-                        send_socks_reply(0x08);
+                        self->send_socks_reply(0x08);
                     return;
                 }
                 else if (cmd == 0x03)
                 {
-                    read_udp();
+                    self->read_udp();
                 }
                 else
                 {
                     // 只支持 CONNECT
                     std::cout << "invalid command: " << static_cast<int>(cmd) << std::endl;
-                    send_socks_reply(0x07);
+                    self->send_socks_reply(0x07);
                     return;
                 }
             });
@@ -426,30 +543,54 @@ private:
         auto self(shared_from_this());
         asio::async_read(
             socket_, asio::buffer(buf_, 6),
-            [this, self](std::error_code ec, std::size_t)
+            [self](std::error_code ec, std::size_t)
             {
                 if (ec)
                 {
-                    print_error("read ipv4 error");
+                    self->print_error("read udp error");
+                    self->close();
                     return;
                 }
                 char tmp[32];
-                std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", buf_[0], buf_[1],
-                              buf_[2], buf_[3]);
-                target_host_ = tmp;
-                target_port_ = (uint16_t(buf_[4]) << 8) | buf_[5];
-                request_remote_connect_for_udp();
+                std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", self->buf_[0], self->buf_[1],
+                              self->buf_[2], self->buf_[3]);
+                self->target_host_ = tmp;
+                self->target_port_ = (uint16_t(self->buf_[4]) << 8) | self->buf_[5];
+                self->request_remote_connect_for_udp();
             });
     }
 
     void request_remote_connect_for_udp()
     {
+        std::weak_ptr<ClientSession> weak_self = shared_from_this();
+        session_ = mux_.create_session();
+        session_->set_on_udp_synack([weak_self](bool ok)
+                                    {
+                                        if (weak_self.expired())
+                                        {
+                                            std::cout << "ClientSession expired" << std::endl;
+                                            return;
+                                        }
+                                        auto self = weak_self.lock();
+                                        self->do_connect_upstream_and_tunnel_for_udp(ok); });
+        mux_.send_udp_syn(session_->stream_id());
+    }
+
+    void do_connect_upstream_and_tunnel_for_udp(bool ok)
+    {
+        if (!ok)
+        {
+            send_socks_reply(0x07);
+            close();
+            return;
+        }
         if (!udp_session_)
         {
-            udp_session_ = std::make_shared<UdpServer>(io_, mux_);
+            udp_session_ = std::make_shared<UdpServer>(io_, mux_, session_);
             if (!udp_session_->start())
             {
                 send_socks_reply(0x01);
+                close();
                 return;
             }
             do_read_from_client_for_udp();
@@ -463,19 +604,20 @@ private:
         auto self(shared_from_this());
         asio::async_read(
             socket_, asio::buffer(buf_, 6),
-            [this, self](std::error_code ec, std::size_t)
+            [self](std::error_code ec, std::size_t)
             {
                 if (ec)
                 {
-                    print_error("read ipv4 error");
+                    self->print_error("read ipv4 error");
+                    self->close();
                     return;
                 }
                 char tmp[32];
-                std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", buf_[0], buf_[1],
-                              buf_[2], buf_[3]);
-                target_host_ = tmp;
-                target_port_ = (uint16_t(buf_[4]) << 8) | buf_[5];
-                request_remote_connect();
+                std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", self->buf_[0], self->buf_[1],
+                              self->buf_[2], self->buf_[3]);
+                self->target_host_ = tmp;
+                self->target_port_ = (uint16_t(self->buf_[4]) << 8) | self->buf_[5];
+                self->request_remote_connect();
             });
     }
 
@@ -484,27 +626,29 @@ private:
         auto self(shared_from_this());
         asio::async_read(
             socket_, asio::buffer(buf_, 1),
-            [this, self](std::error_code ec, std::size_t)
+            [self](std::error_code ec, std::size_t)
             {
                 if (ec)
                 {
-                    print_error("read domain error");
+                    self->print_error("read domain error");
+                    self->close();
                     return;
                 }
-                int len = buf_[0];
+                int len = self->buf_[0];
                 asio::async_read(
-                    socket_, asio::buffer(buf_, len + 2),
-                    [this, self, len](std::error_code ec, std::size_t)
+                    self->socket_, asio::buffer(self->buf_, len + 2),
+                    [self, len](std::error_code ec, std::size_t)
                     {
                         if (ec)
                         {
-                            print_error("read domain error");
+                            self->print_error("read domain error");
+                            self->close();
                             return;
                         }
-                        target_host_.assign(buf_.begin(), buf_.begin() + len);
-                        target_port_ =
-                            (uint16_t(buf_[len]) << 8) | buf_[len + 1];
-                        request_remote_connect();
+                        self->target_host_.assign(self->buf_.begin(), self->buf_.begin() + len);
+                        self->target_port_ =
+                            (uint16_t(self->buf_[len]) << 8) | self->buf_[len + 1];
+                        self->request_remote_connect();
                     });
             });
     }
@@ -513,18 +657,44 @@ private:
     void request_remote_connect()
     {
         session_ = mux_.create_session();
-        auto self(shared_from_this());
-        session_->set_on_data([this, self](const uint8_t *d, size_t n)
-                              {
-            bool writing = !write_queue_.empty();
-            write_queue_.emplace_back(d, d + n);
-            if (!writing) do_write_to_client(); });
-        session_->set_on_synack([this, self](bool ok)
-                                { send_socks_reply(ok ? 0x00 : 0x05); });
-        session_->set_on_close([this, self]()
+        std::weak_ptr<ClientSession> weak_self = shared_from_this();
+        session_->set_on_data([weak_self](const uint8_t *d, size_t n)
+                                    {
+                                        if (weak_self.expired())
+                                        {
+                                            std::cout << "ClientSession expired" << std::endl;
+                                            return;
+                                        }
+                                        auto self = weak_self.lock();
+                                        bool writing = !self->write_queue_.empty();
+                                        self->write_queue_.emplace_back(d, d + n);
+                                        if (!writing) self->do_write_to_client(); 
+                                    });
+        session_->set_on_synack([weak_self](bool ok)
+                                {
+                                    if (weak_self.expired())
+                                    {
+                                        std::cout << "ClientSession expired" << std::endl;
+                                        return;
+                                    }
+                                    auto self = weak_self.lock();
+                                    self->send_socks_reply(ok ? 0x00 : 0x05); 
+                                    if (!ok)
+                                    {
+                                        self->close();
+                                    }
+                                });
+        session_->set_on_close([weak_self]()
                                {
-            std::error_code ec;
-            socket_.close(ec); });
+                                    if (weak_self.expired())
+                                    {
+                                        std::cout << "ClientSession expired" << std::endl;
+                                        return;
+                                    }
+                                    auto self = weak_self.lock();
+                                    self->socket_.close(); 
+                                    self->close();
+                                });
 
         std::cout << "new socks connect request " << target_host_ << ":"
                   << target_port_ << " (stream_id=" << session_->stream_id()
@@ -535,24 +705,28 @@ private:
     void send_socks_reply(uint8_t rep_code)
     {
         auto self(shared_from_this());
-        std::array<uint8_t, 10> reply = {0x05, rep_code, 0x00, 0x01,
-                                         0, 0, 0, 0,
-                                         0, 0};
+        auto reply = std::make_shared<std::array<uint8_t, 10>>(
+            std::array<uint8_t, 10>{0x05, rep_code, 0x00, 0x01, 0, 0, 0, 0, 0, 0});
+
         asio::async_write(
-            socket_, asio::buffer(reply),
-            [this, self, rep_code](std::error_code ec, std::size_t)
+            socket_, asio::buffer(*reply),
+            [self, rep_code, reply](std::error_code ec, std::size_t)
             {
                 if (ec || rep_code != 0x00)
                 {
-                    print_error("write reply error");
+                    self->print_error("write reply error");
+                    self->close();
                     return;
                 }
-                do_read_from_client(); // 开始转发
+                self->do_read_from_client(); // 开始转发
             });
     }
 
+    // tcp通道回复udp建立信息
+
     void send_udp_reply(const std::string &host, int port)
     {
+        std::cout << "send udp reply " << host << ":" << port << "\n";
         auto self(shared_from_this());
         auto reply = std::make_shared<std::vector<uint8_t>>();
 
@@ -576,11 +750,13 @@ private:
 
         asio::async_write(
             socket_, asio::buffer(*reply),
-            [this, self](std::error_code ec, std::size_t)
+            [this, self, reply](std::error_code ec, std::size_t)
             {
                 if (ec)
                 {
                     print_error("write udp reply error");
+                    mux_.send_udp_fin(session_->stream_id());
+                    self->close();
                     return;
                 }
             });
@@ -592,32 +768,35 @@ private:
         auto self(shared_from_this());
         socket_.async_read_some(
             asio::buffer(client_buf_),
-            [this, self](std::error_code ec, std::size_t n)
+            [self](std::error_code ec, std::size_t n)
             {
                 if (ec)
                 {
-                    // print_error("read client error");
-                    mux_.send_fin(session_->stream_id());
+                    std::cout << "read do_read_from_client error" << std::endl;
+                    self->mux_.send_fin(self->session_->stream_id());
+                    self->close();
                     return;
                 }
-                mux_.send_data(session_->stream_id(), client_buf_.data(), n);
-                do_read_from_client();
+                self->mux_.send_data(self->session_->stream_id(), self->client_buf_.data(), n);
+                self->do_read_from_client();
             });
     }
-
+    // 保持tcp不关闭，等待udp数据
     void do_read_from_client_for_udp()
     {
         auto self(shared_from_this());
         socket_.async_read_some(
             asio::buffer(client_buf_),
-            [this, self](std::error_code ec, std::size_t n)
+            [self](std::error_code ec, std::size_t n)
             {
                 if (ec)
                 {
-                    // print_error("read client error");
+                    std::cout << "read do_read_from_client_for_udp error" << std::endl;
+                    self->mux_.send_udp_fin(self->session_->stream_id());
+                    self->close();
                     return;
                 }
-                do_read_from_client_for_udp();
+                self->do_read_from_client_for_udp();
             });
     }
 
@@ -627,22 +806,39 @@ private:
         auto self(shared_from_this());
         asio::async_write(
             socket_, asio::buffer(write_queue_.front()),
-            [this, self](std::error_code ec, std::size_t)
+            [self](std::error_code ec, std::size_t)
             {
                 if (ec)
                 {
-                    print_error("write client error");
+                    self->print_error("write client error");
+                    self->close();
                     return;
                 }
-                write_queue_.pop_front();
-                if (!write_queue_.empty())
-                    do_write_to_client();
+                self->write_queue_.pop_front();
+                if (!self->write_queue_.empty())
+                    self->do_write_to_client();
             });
     }
 
     void print_error(const std::string &msg)
     {
         std::cout << "stream_id=" << (session_.get() ? session_->stream_id() : 0) << " " << "host=" << target_host_ << " " << "port=" << target_port_ << " " << msg << std::endl;
+    }
+
+    void close()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!is_closed_)
+        {
+            is_closed_ = true;
+        }
+        else
+        {
+            return;
+        }
+        if(on_close_)
+            on_close_(id_);
+        socket_.close();
     }
 
     tcp::socket socket_;
@@ -657,6 +853,35 @@ private:
     std::shared_ptr<UdpServer> udp_session_;
 
     asio::io_context &io_;
+
+    std::function<void(uint32_t)> on_close_;
+
+    uint32_t id_ = 0;
+    std::mutex mutex_;
+    bool is_closed_{false};
+};
+
+class ClientSessionManager
+{
+public:
+    ClientSessionManager() = default;
+    ~ClientSessionManager() = default;
+    uint32_t create_session_id() { 
+        if(id_>65535)
+            id_ = 0;
+        return ++id_;
+     }
+    void register_session(std::shared_ptr<ClientSession> s)
+    {
+        uint32_t id = create_session_id();
+        sessions_[id] = s;
+        s->set_client_id(id);
+    }
+    void remove_session(uint32_t stream_id) { sessions_.erase(stream_id); }
+
+private:
+    std::unordered_map<uint32_t, std::shared_ptr<ClientSession>> sessions_;
+    uint32_t id_ = 0;
 };
 
 class SocksServer
@@ -675,11 +900,17 @@ private:
         acceptor_.async_accept([this](std::error_code ec, tcp::socket socket)
                                {
             if (!ec) {
-                std::make_shared<ClientSession>(io_, std::move(socket), mux_)->start();
+                auto s = std::make_shared<ClientSession>(io_, std::move(socket), mux_);
+                session_manager_.register_session(s);
+                s->set_on_close([this](uint32_t id) {
+                    session_manager_.remove_session(id);
+                });
+                s->start();
             }
             do_accept(); });
     }
     tcp::acceptor acceptor_;
     SessionMux &mux_;
     asio::io_context &io_;
+    ClientSessionManager session_manager_;
 };

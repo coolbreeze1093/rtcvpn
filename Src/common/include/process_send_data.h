@@ -25,7 +25,10 @@ public:
                   size_t len)
     {
         if (len > UINT32_MAX)
+        {
+            std::cout << "sendData: len is greater than UINT32_MAX" << std::endl;
             return;
+        }
 
         std::vector<std::byte> buf(len + 4);
 
@@ -47,7 +50,10 @@ public:
     void recvBinaryData(rtc::binary data)
     {
         if (data.size() < 4)
+        {
+            std::cout << "recvBinaryData: data size is less than 4" << std::endl;
             return;
+        }
 
         uint32_t net_len;
 
@@ -56,7 +62,10 @@ public:
         uint32_t len = ntohl(net_len);
 
         if (len > data.size() - 4)
+        {
+            std::cout << "recvBinaryData: data size is less than len" << std::endl;
             return;
+        }
 
         const uint8_t *payload =
             reinterpret_cast<const uint8_t *>(data.data()) + 4;

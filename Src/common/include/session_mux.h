@@ -29,9 +29,8 @@ namespace p2psocks
         using DataCallback = std::function<void(const uint8_t *, size_t)>;
         using SynAckCallback = std::function<void(bool ok)>;
         using CloseCallback = std::function<void()>;
-        using UdpCallback = std::function<void(const std::string&local_host, uint16_t local_port,
-            const std::string&remote_host, uint16_t remote_port,
-            const std::vector<uint8_t>& data)>;
+        using UdpCallback = std::function<void(const std::string&remote_host, uint16_t remote_port,
+            std::shared_ptr<std::vector<uint8_t>> data)>;
         using UdpSynackCallback = std::function<void(bool ok)>;
 
         explicit Session(uint32_t stream_id) : stream_id_(stream_id) {}
@@ -43,12 +42,14 @@ namespace p2psocks
         void set_on_close(CloseCallback cb) { on_close_ = std::move(cb); }
         void set_on_udp_data(UdpCallback cb) { on_udp_data_ = std::move(cb); }
         void set_on_udp_synack(UdpSynackCallback cb) { on_udp_synack_ = std::move(cb); }
+        void set_on_udp_close(CloseCallback cb) { on_udp_close_ = std::move(cb); }
 
         DataCallback on_data_;
         SynAckCallback on_synack_;
         CloseCallback on_close_;
         UdpCallback on_udp_data_;
         UdpSynackCallback on_udp_synack_;
+        CloseCallback on_udp_close_;
 
     private:
         uint32_t stream_id_;
@@ -62,13 +63,11 @@ namespace p2psocks
             std::function<void(uint32_t conn_id, const uint8_t *data, size_t len)>;
 
         // SynHandler: 远端角色用，收到新会话请求(host,port)时触发
-        using SynHandler = std::function<void(std::shared_ptr<Session> session,
+        using SynHandler = std::function<void(uint32_t session_id,
                                               const std::string &host,
                                               uint16_t port)>;
 
-        using UdpSynHandler = std::function<void(uint32_t stream_id)>;
-
-        using UdpFinHandler = std::function<void(uint32_t stream_id)>;
+        using UdpSynHandler = std::function<void(uint32_t session_id)>;
 
         // peer_conn_id: 你的 P2P 模块里代表"对端"的连接标识，由你在建立好P2P连接后传入
         SessionMux(uint32_t peer_conn_id)
@@ -79,8 +78,6 @@ namespace p2psocks
         void set_on_syn(SynHandler h) { on_syn_ = std::move(h); }
 
         void set_on_udp_syn(UdpSynHandler h) { on_udp_syn_ = std::move(h); }
-
-        void set_on_udp_fin(UdpFinHandler h) { on_udp_fin_ = std::move(h); }
 
         // ---------- 这个函数由你接到P2P模块的"收到数据"回调里调用 ----------
         // 例如: p2pModule.setOnReceive([&](uint32_t conn_id, const uint8_t* d, size_t n){
@@ -106,10 +103,8 @@ namespace p2psocks
                 uint16_t port;
                 if (!decode_syn_payload(payload, plen, host, port))
                     return;
-                auto s = std::make_shared<Session>(h.stream_id);
-                sessions_[h.stream_id] = s;
                 if (on_syn_)
-                    on_syn_(s, host, port);
+                    on_syn_(h.stream_id, host, port);
                 break;
             }
             case FrameType::SYNACK:
@@ -138,13 +133,10 @@ namespace p2psocks
                     return;
                 if (it->second->on_close_)
                     it->second->on_close_();
-                sessions_.erase(it);
                 break;
             }
             case FrameType::UDP_SYN:
             {
-                auto s = std::make_shared<Session>(h.stream_id);
-                sessions_[h.stream_id] = s;
                 if (on_udp_syn_)
                     on_udp_syn_(h.stream_id);
                 break;
@@ -164,56 +156,31 @@ namespace p2psocks
                 auto it = sessions_.find(h.stream_id);
                 if (it == sessions_.end())
                     return;
-                if (on_udp_fin_)
-                    on_udp_fin_(h.stream_id);
+                if (it->second->on_udp_close_)
+                    it->second->on_udp_close_();
                 break;
             }
             case FrameType::UDP_DATA:
             {
                 auto it = sessions_.find(h.stream_id);
                 if (it == sessions_.end())
+                {
+                    std::cout << "session not found" << std::endl;
                     return;
+                }
 
-                std::string local_host;
-                uint16_t local_port;
-                std::string remote_host;
-                uint16_t remote_port;
-                std::vector<uint8_t> data;
-                if (!decode_udp_payload(payload, plen, local_host, local_port, remote_host, remote_port, data))
+                std::string host;
+                uint16_t port;
+                std::shared_ptr<std::vector<uint8_t>> data = std::make_shared<std::vector<uint8_t>>();
+                if (!decode_udp_payload(payload, plen, host, port, data))
+                {
+                    std::cout << "invalid udp payload" << std::endl;
                     return;
-
-                if (it->second->on_udp_data_)
-                    it->second->on_udp_data_(local_host, local_port, remote_host, remote_port, data);
-            }
-            case FrameType::UDP_TO_CLIENT:
-            {
-                auto it = sessions_.find(h.stream_id);
-                if (it == sessions_.end())
-                    return;
-
-                std::string local_host;
-                uint16_t local_port;
-                std::string remote_host;
-                uint16_t remote_port;
-                std::vector<uint8_t> data;
-                if (!decode_udp_payload(payload, plen, local_host, local_port, remote_host, remote_port, data))
-                    return;
+                }
 
                 if (it->second->on_udp_data_)
-                    it->second->on_udp_data_(local_host, local_port, remote_host, remote_port, data);
-                break;
-            }
-            case FrameType::UDP_TO_SERVER:
-            {
-                std::string local_host;
-                uint16_t local_port;
-                std::string remote_host;
-                uint16_t remote_port;
-                std::vector<uint8_t> data;
-                if (!decode_udp_payload(payload, plen, local_host, local_port, remote_host, remote_port, data))
-                    return;
+                    it->second->on_udp_data_(host, port, data);
 
-                
                 break;
             }
             default:
@@ -230,6 +197,13 @@ namespace p2psocks
             uint32_t sid = gen_stream_id();
             auto s = std::make_shared<Session>(sid);
             sessions_[sid] = s;
+            return s;
+        }
+
+        std::shared_ptr<Session> create_session(uint32_t stream_id)
+        {
+            auto s = std::make_shared<Session>(stream_id);
+            sessions_[stream_id] = s;
             return s;
         }
 
@@ -268,21 +242,30 @@ namespace p2psocks
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
 
-        void send_udp(uint32_t stream_id, const std::string&local_host, uint16_t local_port,
-            const std::string&remote_host, uint16_t remote_port,
-            const std::vector<uint8_t>& data)
+        void send_udp_syn(uint32_t stream_id)
         {
-            auto payload = encode_udp_payload(local_host, local_port, remote_host, remote_port, data);
-            auto frame = make_frame(stream_id, FrameType::UDP_TO_SERVER, payload.data(), payload.size());
+            auto frame = make_frame(stream_id, FrameType::UDP_SYN);
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
 
-        void send_udp_reply(uint32_t stream_id, const std::string&local_host, uint16_t local_port,
-            const std::string&remote_host, uint16_t remote_port,
+        void send_udp_synack(uint32_t stream_id, bool ok)
+        {
+            uint8_t status = ok ? 0 : 1;
+            auto frame = make_frame(stream_id, FrameType::UDP_SYNACK, &status, 1);
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+
+        void send_udp_fin(uint32_t stream_id)
+        {
+            auto frame = make_frame(stream_id, FrameType::UDP_FIN);
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        
+        void send_udp(uint32_t stream_id, const std::string&host, uint16_t port,
             const std::vector<uint8_t>& data)
         {
-            auto payload = encode_udp_payload(local_host, local_port, remote_host, remote_port, data);
-            auto frame = make_frame(stream_id, FrameType::UDP_TO_CLIENT, payload.data(), payload.size());
+            auto payload = encode_udp_payload(host, port, data);
+            auto frame = make_frame(stream_id, FrameType::UDP_DATA, payload.data(), payload.size());
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
 
@@ -303,7 +286,6 @@ namespace p2psocks
         uint32_t peer_conn_id_;
         SynHandler on_syn_;
         UdpSynHandler on_udp_syn_;
-        UdpFinHandler on_udp_fin_;
         std::map<uint32_t, std::shared_ptr<Session>> sessions_;
     };
 

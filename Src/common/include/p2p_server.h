@@ -6,8 +6,6 @@
 #include <variant>
 #include <nlohmann/json.hpp>
 #include <csignal>
-#include "p2p_server_manager.h"
-#include "uuid_v4.h"
 
 using json = nlohmann::json;
 
@@ -15,9 +13,9 @@ class ws_server:public std::enable_shared_from_this<ws_server>
 {
     
 public:
-    ws_server(const std::string& uuid)
+    ws_server(uint32_t id_card)
     {
-        id_card_ = uuid;
+        id_card_ = id_card;
     }
     ~ws_server()
     {
@@ -38,7 +36,7 @@ public:
         ws_->send(str);
     }
 
-    void bindLoginSuccess(std::function<void(std::string)> callback)
+    void bindLoginSuccess(std::function<void(uint32_t)> callback)
     {
         loginSuccessFunc_ = callback;
     }
@@ -150,7 +148,7 @@ public:
                                 << std::endl; });
     }
 
-    void bindCloseFunc(std::function<void (std::string)> cb)
+    void bindCloseFunc(std::function<void (uint32_t)> cb)
     {
         close_func_ = std::move(cb);
     }
@@ -160,16 +158,16 @@ private:
     std::shared_ptr<rtc::WebSocket> ws_;
     std::function<void (std::string,std::string)> setRemoteDescriptionFunc_;
     std::function<void (std::string,std::string)> addRemoteCandidateFunc_;
-    std::function<void (std::string)> loginSuccessFunc_;
-    std::function<void (std::string)> close_func_;
+    std::function<void (uint32_t)> loginSuccessFunc_;
+    std::function<void (uint32_t)> close_func_;
 
-    std::string id_card_;
+    uint32_t id_card_;
 };
 
 class p2p_server:public std::enable_shared_from_this<p2p_server>
 {
 public:
-    p2p_server(std::string id_card)
+    p2p_server(uint32_t id_card)
     {
         id_card_ = id_card;
     }
@@ -191,7 +189,7 @@ public:
         dc_->send(data, size);
     }
 
-    void bindCloseFunc(std::function<void (std::string)> cb)
+    void bindCloseFunc(std::function<void (uint32_t)> cb)
     {
         close_func_ = std::move(cb);
     }
@@ -292,9 +290,9 @@ public:
 private:
     std::shared_ptr<rtc::DataChannel> dc_;
     std::shared_ptr<rtc::PeerConnection> pc_;
-    std::string id_card_;
+    uint32_t id_card_;
     rtc::Configuration p2p_config_;
     std::function<void(rtc::binary message)> data_channel_binary_callback_;
     std::function<void (const std::string&)> send_func_;
-    std::function<void (std::string)> close_func_;
+    std::function<void (uint32_t)> close_func_;
 };
