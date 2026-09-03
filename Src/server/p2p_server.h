@@ -6,6 +6,7 @@
 #include <variant>
 #include <nlohmann/json.hpp>
 #include <csignal>
+#include <plog/Log.h>
 
 using json = nlohmann::json;
 
@@ -16,10 +17,11 @@ public:
     ws_server(uint32_t id_card)
     {
         id_card_ = id_card;
+        PLOG_DEBUG << "ws_server created  " << id_card_;
     }
     ~ws_server()
     {
-        std::cout << "ws_server::~ws_server()  " << id_card_<< std::endl;
+        PLOG_DEBUG << "ws_server::~ws_server()  " << id_card_;
     }
     void connect(std::shared_ptr<rtc::WebSocket> ws)
     {
@@ -53,17 +55,17 @@ public:
     void bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
     {
         ws->onOpen([this]()
-                   { std::cout << "WebSocket opened" << std::endl; });
+                   { PLOG_DEBUG << "WebSocket opened"; });
 
         ws->onMessage([](rtc::binary data) {}, [this](std::string message)
                       {
                         try {
-                        std::cout << "Received message: " << message << std::endl;
+                        PLOG_DEBUG << "Received message: " << message;
                         json message_json = json::parse(message);
 
                         if(message_json.find("type")==message_json.end())
                         {
-                            std::cout << "Invalid message" << std::endl;
+                            PLOG_ERROR << "Invalid message";
                             return;
                         }
                         
@@ -72,7 +74,7 @@ public:
                         {
                             if(message_json.find("description")==message_json.end())
                             {
-                                std::cout << "No sdp" << std::endl;
+                                PLOG_ERROR << "No sdp";
                                 return;
                             }
                             std::string sdp = message_json["description"];
@@ -86,7 +88,7 @@ public:
                                 std::string pwd = message_json["passwd"];
                                 if(pwd == "test")
                                 {
-                                    std::cout << "Password is correct" << std::endl;
+                                    PLOG_DEBUG << "Password is correct";
                                     json j;
                                     j["type"] = "verify";
                                     j["result"] = "success";
@@ -96,7 +98,7 @@ public:
                             }
                             else
                             {
-                                std::cout << "Password is incorrect" << std::endl;
+                                PLOG_ERROR << "Password is incorrect";
                                 json j;
                                 j["status"] = "failed";
                                 j["type"] = "verify";
@@ -107,12 +109,12 @@ public:
                         {
                             if(message_json.find("candidate") == message_json.end())
                             {
-                                std::cerr << "Error: No candidate field in Candidate message" << std::endl;
+                                PLOG_ERROR << "Error: No candidate field in Candidate message";
                                 return;
                             }
                             if(message_json.find("mid") == message_json.end())
                             {
-                                std::cerr << "Error: No mid field in Candidate message" << std::endl;
+                                PLOG_ERROR << "Error: No mid field in Candidate message";
                                 return;
                             }
 
@@ -124,28 +126,26 @@ public:
                         else
                         {
                                 // Invalid message
-                            std::cout << "Invalid message" << std::endl;
+                            PLOG_ERROR << "Invalid message";
                             return;
                         }
                     }
                         catch (const std::exception& e) {
-            std::cout << "WebSocket message exception: "
-                      << e.what() << std::endl;
+            PLOG_ERROR << "WebSocket message exception: "
+                      << e.what();
         }
 
-                        std::cout << "Received: "
-                                   << message
-                                   << std::endl; });
+                        PLOG_DEBUG << "Received: "
+                                   << message; });
         ws->onClosed([this]()
                      { 
                         close_func_(id_card_);
-                        std::cout << "WebSocket closed" << std::endl; });
+                        PLOG_DEBUG << "WebSocket closed"; });
 
         ws->onError([](std::string message)
                     {
-                        std::cout << "WebSocket error: "
-                                << message
-                                << std::endl; });
+                        PLOG_ERROR << "WebSocket error: "
+                                << message; });
     }
 
     void bindCloseFunc(std::function<void (uint32_t)> cb)
@@ -169,11 +169,12 @@ class p2p_server:public std::enable_shared_from_this<p2p_server>
 public:
     p2p_server(uint32_t id_card)
     {
+        PLOG_DEBUG << "p2p_server constructor, id_card: " << id_card;
         id_card_ = id_card;
     }
 
     ~p2p_server(){
-        std::cout<<"~p2p_server"<<std::endl;
+        PLOG_DEBUG << "~p2p_server destructor";
     }
     void init(rtc::Configuration config)
     {
@@ -187,6 +188,11 @@ public:
     void send(std::byte *data, size_t size)
     {
         dc_->send(data, size);
+    }
+
+    void close()
+    {
+        pc_->close();
     }
 
     void bindCloseFunc(std::function<void (uint32_t)> cb)
@@ -216,13 +222,13 @@ public:
     {
         dc_ = dc;
         dc_->onOpen([]()
-                    { std::cout << "DataChannel opened" << std::endl; });
+                    { PLOG_DEBUG << "DataChannel opened"; });
 
         dc_->onClosed([]()
-                      { std::cout << "DataChannel closed" << std::endl; });
+                      { PLOG_DEBUG << "DataChannel closed"; });
 
         dc_->onError([](std::string message)
-                     { std::cout << "DataChannel error: "; });
+                     { PLOG_ERROR << "DataChannel error: " << message; });
 
         dc_->onMessage([this](rtc::binary message)
                        {
@@ -232,9 +238,9 @@ public:
             }
             else
             {
-                std::cout << "DataChannel binary message: " << message.size() << " bytes" << std::endl;
+                PLOG_DEBUG << "DataChannel binary message: " << message.size() << " bytes";
             } }, [this](std::string message)
-                       { std::cout << "DataChannel message: " << message << std::endl; });
+                       { PLOG_DEBUG << "DataChannel message: " << message; });
     }
 
     void createPeerConnection()
@@ -247,14 +253,12 @@ public:
                             {
                                 close_func_(id_card_);
                             }
-                            std::cout << "PeerConnection state: "
-                                       << static_cast<int>(state)
-                                       << std::endl; });
+                            PLOG_DEBUG << "PeerConnection state: "
+                                       << static_cast<int>(state); });
 
         pc_->onGatheringStateChange([](rtc::PeerConnection::GatheringState state)
-                                    { std::cout << "Gathering state: "
-                                                << static_cast<int>(state)
-                                                << std::endl; });
+                                    { PLOG_DEBUG << "Gathering state: "
+                                                << static_cast<int>(state); });
 
         pc_->onLocalCandidate([this](rtc::Candidate candidate)
                               { 
@@ -264,9 +268,8 @@ public:
                                 j["mid"] = candidate.mid();
                                 this->send_func_(j.dump());
                                 //this->ws_->send(j.dump());
-                                std::cout << "Local candidate: "
-                                          << candidate
-                                          << std::endl; });
+                                PLOG_DEBUG << "Local candidate: "
+                                          << candidate; });
 
         pc_->onLocalDescription([this](rtc::Description description)
                                 { 
@@ -275,13 +278,12 @@ public:
                                     j["description"]=description;
                                     this->send_func_(j.dump());
                                     //this->ws_->send(j.dump());
-                                    std::cout << "Local description: "
-                                            << description
-                                            << std::endl; });
+                                    PLOG_DEBUG << "Local description: "
+                                            << description; });
 
         pc_->onDataChannel([this](std::shared_ptr<rtc::DataChannel> dc)
                            {
-                              std::cout << "New DataChannel" << std::endl;
+                              PLOG_DEBUG << "New DataChannel";
                               createDataChannel(dc); });
     }
 

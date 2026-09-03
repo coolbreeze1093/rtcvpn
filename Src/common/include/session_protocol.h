@@ -10,20 +10,25 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <optional>
+#include <memory>
+#include <asio.hpp>
+#include <plog/Log.h>
+
 
 namespace p2psocks
 {
 
     enum class FrameType : uint8_t
     {
-        SYN = 0x01,           // 请求建立到目标的连接, payload = host_len(1)+host+port(2)
-        SYNACK = 0x02,        // 连接结果, payload = 1字节状态(0=成功,1=失败)
-        DATA = 0x03,          // 数据, payload = 原始字节
-        FIN = 0x04,           // 关闭该会话, payload 为空
-        UDP_SYN = 0x05,       // UDP 连接请求, payload = host_len(1)+host+port(2)
-        UDP_SYNACK = 0x06,    // UDP 连接结果, payload = 1字节状态(0=成功,1=失败)
-        UDP_FIN = 0x07,       // UDP 关闭该会话, payload 为空
-        UDP_DATA = 0x08,      // UDP 数据, payload = 原始字节
+        SYN = 0x01,        // 请求建立到目标的连接, payload = host_len(1)+host+port(2)
+        SYNACK = 0x02,     // 连接结果, payload = 1字节状态(0=成功,1=失败)
+        DATA = 0x03,       // 数据, payload = 原始字节
+        FIN = 0x04,        // 关闭该会话, payload 为空
+        UDP_SYN = 0x05,    // UDP 连接请求, payload = host_len(1)+host+port(2)
+        UDP_SYNACK = 0x06, // UDP 连接结果, payload = 1字节状态(0=成功,1=失败)
+        UDP_FIN = 0x07,    // UDP 关闭该会话, payload 为空
+        UDP_DATA = 0x08,   // UDP 数据, payload = 原始字节
     };
 
     struct SendData
@@ -186,6 +191,53 @@ namespace p2psocks
         data->assign(buf + pos, buf + pos + data_len);
 
         return true;
+    }
+
+    inline std::vector<std::byte> packMessage(const uint8_t *data, size_t len)
+    {
+        if (len > UINT32_MAX)
+        {
+            throw std::length_error("packMessage: len exceeds UINT32_MAX");
+        }
+
+        std::vector<std::byte> buf(len + 4);
+
+        uint32_t net_len = htonl(static_cast<uint32_t>(len));
+        memcpy(buf.data(), &net_len, 4);
+        memcpy(buf.data() + 4, data, len);
+
+        return buf;
+    }
+
+    // ---------- 解包结果 ----------
+    struct UnpackedMessage
+    {
+        const uint8_t *payload;
+        uint32_t len;
+    };
+
+    // ---------- 解包：从原始字节中取出 len + payload ----------
+    // 返回 std::nullopt 表示数据不合法
+    inline std::optional<UnpackedMessage> unpackMessage(const std::byte *data, size_t size)
+    {
+        if (size < 4)
+        {
+            PLOG_WARNING << "unpackMessage: data size is less than 4";
+            return std::nullopt;
+        }
+
+        uint32_t net_len;
+        memcpy(&net_len, data, 4);
+        uint32_t len = ntohl(net_len);
+
+        if (len > size - 4)
+        {
+            PLOG_WARNING << "unpackMessage: data size is less than len";
+            return std::nullopt;
+        }
+
+        const uint8_t *payload = reinterpret_cast<const uint8_t *>(data) + 4;
+        return UnpackedMessage{payload, len};
     }
 
 } // namespace p2psocks

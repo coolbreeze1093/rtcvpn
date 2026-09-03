@@ -1,8 +1,8 @@
 #include <csignal>
 #include <asio.hpp>
-#include "local.h"
+#include "socks5.h"
 #include "p2p_client.h"
-#include "process_send_data.h"
+#include <plog/Log.h>
 
 std::atomic<bool> running{true};
 void signal_handler(int signal)
@@ -14,7 +14,7 @@ int main(int argc, char *argv[])
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    std::cout << "RTC WebRTC C++" << std::endl;
+    PLOG_INFO << "RTC WebRTC C++";
     rtc::InitLogger(rtc::LogLevel::Info);
     rtc::Configuration config;
     config.iceServers = {
@@ -34,7 +34,30 @@ int main(int argc, char *argv[])
         uint32_t peer_conn_id = 1; // 占位，换成你的真实值
         SessionMux mux(peer_conn_id);
 
-        ProcessSendData processSendData(&client, mux);
+        client.bindDataChannel([&mux](rtc::binary data)
+                                 {
+                        auto result = p2psocks::unpackMessage(data.data(), data.size());
+                        if (!result)
+                        {
+                            return;
+                        }
+
+                    mux.on_p2p_data(1, result->payload, result->len); 
+                });
+        mux.set_send_func([&client](uint32_t conn_id, const uint8_t *data, size_t len)
+                           {
+            std::vector<std::byte> buf;
+            try
+            {
+                buf = p2psocks::packMessage(data, len);
+            }
+            catch (const std::length_error &e)
+            {
+                PLOG_ERROR << "sendData: " << e.what();
+                return;
+            }
+            client.send(buf.data(), buf.size());
+             });
         
         SocksServer server(io, socks_port, mux);
         

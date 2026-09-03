@@ -22,6 +22,7 @@ target_link_libraries(client
     PRIVATE
     datachannel
     nlohmann_json::nlohmann_json
+    plog::plog
 
     ${windows_libs}
 )

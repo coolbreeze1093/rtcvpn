@@ -14,8 +14,8 @@
 #include <memory>
 #include <random>
 #include <iostream>
-
 #include "session_protocol.h"
+#include <plog/Log.h>
 
 namespace p2psocks
 {
@@ -88,7 +88,7 @@ namespace p2psocks
             FrameHeader h;
             if (!FrameHeader::decode(data, len, h))
             {
-                std::cout << "invalid frame header" << std::endl;
+                PLOG_WARNING << "invalid frame header stream_id "<<h.stream_id;
                 return;
             }
 
@@ -165,7 +165,7 @@ namespace p2psocks
                 auto it = sessions_.find(h.stream_id);
                 if (it == sessions_.end())
                 {
-                    std::cout << "session not found" << std::endl;
+                    PLOG_WARNING << "session not found stream_id "<<h.stream_id;
                     return;
                 }
 
@@ -174,7 +174,7 @@ namespace p2psocks
                 std::shared_ptr<std::vector<uint8_t>> data = std::make_shared<std::vector<uint8_t>>();
                 if (!decode_udp_payload(payload, plen, host, port, data))
                 {
-                    std::cout << "invalid udp payload" << std::endl;
+                    PLOG_WARNING << "invalid udp payload stream_id "<<h.stream_id;
                     return;
                 }
 
@@ -185,7 +185,7 @@ namespace p2psocks
             }
             default:
             {
-                std::cout << "invalid frame type" << std::endl;
+                PLOG_WARNING << "invalid frame type stream_id "<<h.stream_id;
                 break;
             }
             }

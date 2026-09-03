@@ -59,6 +59,32 @@ file(MAKE_DIRECTORY ${BUILD_DIR})
 
 include(FetchContent)
 
+if(TARGET nlohmann_json::nlohmann_json)
+    message(STATUS "✅ nlohmann_json::nlohmann_json target 存在")
+else()
+    FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.12.0
+)
+
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
+
+# ---- 在 Declare/MakeAvailable 之前设置选项 ----
+set(NO_EXAMPLES ON CACHE BOOL "" FORCE)          # 不编译示例
+set(NO_TESTS ON CACHE BOOL "" FORCE)             # 不编译测试
+set(NO_WEBSOCKET OFF CACHE BOOL "" FORCE)        # 是否禁用 WebSocket 支持
+set(NO_MEDIA ON CACHE BOOL "" FORCE)            # 是否禁用媒体传输(SRTP)支持
+set(ENABLE_OPENSSL ON CACHE BOOL "" FORCE)                # 是否启用 OpenSSL
+set(USE_GNUTLS OFF CACHE BOOL "" FORCE)          # 用 GnuTLS 而不是 OpenSSL
+set(USE_NICE OFF CACHE BOOL "" FORCE)            # 用 libnice 而不是内置的 libjuice 做 ICE
+set(USE_MBEDTLS OFF CACHE BOOL "" FORCE)         # 用 mbedTLS
+set(PREFER_SYSTEM_LIB OFF CACHE BOOL "" FORCE)   # 是否优先用系统已装的依赖库（而不是自己 fetch）
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)   # 静态库还是动态库
+set(LIBSRTP_TEST_APPS OFF CACHE BOOL "" FORCE)   # 是否编译测试应用
+
 FetchContent_Declare(
     libdatachannel
     GIT_REPOSITORY https://github.com/paullouisageneau/libdatachannel.git
@@ -66,16 +92,6 @@ FetchContent_Declare(
 )
 
 FetchContent_MakeAvailable(libdatachannel)
-
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.12.0
-)
-
-FetchContent_MakeAvailable(nlohmann_json)
-
-
 
 add_subdirectory(Src/client)
 add_subdirectory(Src/server)

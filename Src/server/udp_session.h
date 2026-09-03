@@ -1,11 +1,3 @@
-// remote.cpp —— 远端 (Egress)
-// 职责：收到 P2P 隧道传来的 SYN(host,port) -> 真正 connect() 目标服务器
-//       -> 把连接结果通过 SYNACK 回给本地端 -> 之后双向转发数据。
-//
-// !!! 需要你接入的地方，我都用 "TODO(P2P)" 标出了 !!!
-//
-// 编译:
-//   g++ -std=c++17 -O2 -DASIO_STANDALONE remote.cpp -lpthread -o remote
 #pragma once
 #include <asio.hpp>
 #include <deque>
@@ -13,164 +5,6 @@
 #include <memory>
 #include "session_mux.h"
 #include <array>
-
-using asio::ip::tcp;
-using namespace p2psocks;
-
-class RemoteSession : public std::enable_shared_from_this<RemoteSession>
-{
-public:
-    RemoteSession(asio::io_context &io, SessionMux &mux,
-                  uint32_t session_id)
-        : io_(io), mux_(mux), target_socket_(io)
-    {
-        session_ = mux_.create_session(session_id);
-    }
-
-    ~RemoteSession()
-    {
-        if (session_)
-        {
-            mux_.remove_session(session_->stream_id());
-        }
-        std::cout << "RemoteSession close, stream_id=" << session_->stream_id() << "\n";
-    }
-
-    void bind_close_func(std::function<void(uint32_t session_id)> func)
-    {
-        close_func_ = func;
-    }
-
-    void set_session_id(uint32_t session_id)
-    {
-        session_id_ = session_id;
-    }
-
-    void connect_target(const std::string &host, uint16_t port)
-    {
-        auto self(shared_from_this());
-        auto resolver = std::make_shared<tcp::resolver>(io_);
-        resolver->async_resolve(
-            host, std::to_string(port),
-            [this, self, resolver](std::error_code ec,
-                                   tcp::resolver::results_type results)
-            {
-                if (ec)
-                {
-                    std::cerr << "resolve host failed " << ec.message() << "\n";
-                    mux_.send_synack(session_->stream_id(), false);
-                    close();
-                    return;
-                }
-                asio::async_connect(
-                    target_socket_, results,
-                    [this, self](std::error_code ec, const tcp::endpoint &)
-                    {
-                        if (ec)
-                        {
-                            std::cerr << "connect target failed, " << ec.message()
-                                      << "\n";
-                            mux_.send_synack(session_->stream_id(), false);
-                            close();
-                            return;
-                        }
-                        std::cout << "connect target success, stream_id="
-                                  << session_->stream_id() << "\n";
-                        mux_.send_synack(session_->stream_id(), true);
-                        setup_session_callbacks();
-                        do_read_from_target();
-                    });
-            });
-    }
-
-private:
-    void setup_session_callbacks()
-    {
-        std::weak_ptr<RemoteSession> weak_self = shared_from_this();
-
-        session_->set_on_data([weak_self](const uint8_t *d, size_t n)
-                              {
-            // 来自本地端(浏览器)的数据 -> 写给目标服务器
-            if(weak_self.expired())
-                return;
-            auto self = weak_self.lock();
-
-            bool writing = !self->to_target_queue_.empty();
-            self->to_target_queue_.emplace_back(d, d + n);
-            if (!writing) self->do_write_to_target(); });
-        session_->set_on_close([weak_self]()
-                               {
-            if(weak_self.expired())
-                return;
-            auto self = weak_self.lock();
-
-            std::error_code ec;
-            self->target_socket_.close(ec);
-            self->close(); });
-    }
-
-    void do_write_to_target()
-    {
-        auto self(shared_from_this());
-        asio::async_write(
-            target_socket_, asio::buffer(to_target_queue_.front()),
-            [this, self](std::error_code ec, std::size_t)
-            {
-                if (ec)
-                {
-                    std::cout << "do_write_to_target error, stream_id=" << session_->stream_id() << std::endl;
-                    close();
-                    return;
-                }
-                to_target_queue_.pop_front();
-                if (!to_target_queue_.empty())
-                    do_write_to_target();
-            });
-    }
-
-    void do_read_from_target()
-    {
-        auto self(shared_from_this());
-        target_socket_.async_read_some(
-            asio::buffer(target_buf_),
-            [this, self](std::error_code ec, std::size_t n)
-            {
-                if (ec)
-                {
-                    std::cout << "do_read_from_target error, stream_id=" << session_->stream_id() << std::endl;
-                    mux_.send_fin(session_->stream_id());
-                    close();
-                    return;
-                }
-                mux_.send_data(session_->stream_id(), target_buf_.data(), n);
-                do_read_from_target();
-            });
-    }
-
-    void close()
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!is_closed_)
-        {
-            is_closed_ = true;
-            if (close_func_)
-                close_func_(session_id_);
-        }
-    }
-
-    asio::io_context &io_;
-    SessionMux &mux_;
-    std::shared_ptr<Session> session_;
-    std::function<void(uint32_t stream_id)> close_func_;
-    tcp::socket target_socket_;
-    std::array<uint8_t, 8192> target_buf_{};
-    std::deque<std::vector<uint8_t>> to_target_queue_;
-    bool is_closed_ = false;
-
-    uint32_t session_id_ = 0;
-
-    std::mutex mutex_;
-};
 
 using asio::ip::udp;
 
@@ -180,10 +14,11 @@ public:
     UdpClient(asio::io_context &io_context, SessionMux &mux, uint32_t session_id)
         : io_(io_context), socket_(io_context), mux_(mux), recv_buf_(65536), session_(mux.create_session(session_id))
     {
+        PLOG_DEBUG << "UdpClient created, session_id: " << session_id;
     }
     ~UdpClient()
     {
-        std::cout << "UdpClient destroyed" << std::endl;
+        PLOG_DEBUG << "UdpClient destroyed";
         socket_.close();
         if (session_)
         {
@@ -198,10 +33,9 @@ public:
         socket_.open(udp::v4(), ec);
         if (ec)
         {
-            std::cout
+            PLOG_ERROR
                 << "open failed:"
-                << ec.message()
-                << std::endl;
+                << ec.message();
             mux_.send_udp_synack(session_->stream_id(), false);
             close();
             return false;
@@ -209,15 +43,14 @@ public:
         socket_.bind(udp::endpoint(udp::v4(), 0), ec);
         if (ec)
         {
-            std::cout
+            PLOG_ERROR
                 << "bind failed:"
-                << ec.message()
-                << std::endl;
+                << ec.message();
             mux_.send_udp_synack(session_->stream_id(), false);
             close();
             return false;
         }
-        std::cout << "UDP server listening on port " << socket_.local_endpoint().port() << std::endl;
+        PLOG_DEBUG << "UDP server listening on port " << socket_.local_endpoint().port() << ", session_id: " << session_id_;
 
         start_receive();
 
@@ -241,7 +74,9 @@ public:
                                          return;
                                      }
                                      auto self = weak_self.lock();
-                                     self->socket_.close(); });
+                                     self->socket_.close();
+                                     PLOG_DEBUG << "UdpClient close, session_id: " << self->session_id_;
+                                     });
 
         mux_.send_udp_synack(session_->stream_id(), true);
 
@@ -284,7 +119,7 @@ private:
             {
                 if (ec)
                 {
-                    std::cerr << "resolve host failed " << ec.message() << "\n";
+                    PLOG_ERROR << "resolve host failed " << ec.message();
                     send_queue_.pop_front();
                     if (!send_queue_.empty())
                         do_send_next();
@@ -300,9 +135,8 @@ private:
                     {
                         if (ec)
                         {
-                            std::cout << "send error: "
-                                      << ec.message()
-                                      << std::endl;
+                            PLOG_ERROR << "send error: "
+                                      << ec.message();
                             self->close();
                             return;
                         }
@@ -326,7 +160,7 @@ private:
         {
             if (!ec)  // 定时器正常触发(没有被取消),说明超时了
             {
-                std::cout << "UDP receive timeout, closing. stream_id=" << self->session_->stream_id() << std::endl;
+                PLOG_WARNING << "UDP receive timeout, closing. stream_id=" << self->session_->stream_id();
                 self->socket_.close();  // 这会让 async_receive_from 以 operation_aborted 返回
             }
         });*/
@@ -346,7 +180,7 @@ private:
                 }
                 else
                 {
-                    std::cout << "receive error: " << ec.message() << std::endl;
+                    PLOG_ERROR << "receive error: " << ec.message();
                     self->close();
                 }
             });
