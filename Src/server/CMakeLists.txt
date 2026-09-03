@@ -3,13 +3,21 @@ cmake_minimum_required(VERSION 3.20)
 project(server LANGUAGES C CXX)
 
 add_executable(server
-    main.cpp
+    src/main.cpp
+    src/udp_session.cpp
+    src/p2p_server.cpp
+    src/tcp_session.cpp
+    src/process_new_client.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/session_protocol.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/session_mux.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/session_id_generator.cpp
 )
 
 target_include_directories(server
     PRIVATE
     ${CMAKE_SOURCE_DIR}/ThirdParty/asio-1.38.2/include
-    ${CMAKE_SOURCE_DIR}/Src/common/include)
+    ${CMAKE_SOURCE_DIR}/Src/common/include
+    include)
 
 if(UNIX)
 

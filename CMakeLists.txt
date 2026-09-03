@@ -93,5 +93,9 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(libdatachannel)
 
+if(WIN32)
+    add_compile_definitions(_WIN32_WINNT=0x0A00)
+endif()
+
 add_subdirectory(Src/client)
 add_subdirectory(Src/server)
