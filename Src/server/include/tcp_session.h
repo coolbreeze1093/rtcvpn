@@ -20,7 +20,7 @@ using namespace p2psocks;
 class TcpSession : public std::enable_shared_from_this<TcpSession>
 {
 public:
-    TcpSession(asio::io_context &io, SessionMux &mux,
+    TcpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
               uint32_t session_id);
 
     ~TcpSession();
@@ -41,7 +41,7 @@ private:
     void close();
 
     asio::io_context &io_;
-    SessionMux &mux_;
+    std::weak_ptr<SessionMux> weak_mux_;
     std::shared_ptr<Session> session_;
     std::function<void(uint32_t stream_id)> close_func_;
     tcp::socket target_socket_;

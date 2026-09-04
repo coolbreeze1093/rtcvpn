@@ -36,22 +36,22 @@ void ws_server::bindLoginSuccess(std::function<void(uint32_t)> callback)
     loginSuccessFunc_ = callback;
 }
 
-void ws_server::bindsetRemoteDescriptionFunc(std::function<void(std::string, std::string)> callback)
+void ws_server::bindsetRemoteDescriptionFunc(std::function<void(const std::string&, const std::string&)> callback)
 {
     setRemoteDescriptionFunc_ = callback;
 }
 
-void ws_server::bindaddRemoteCandidateFunc(std::function<void(std::string, std::string)> callback)
+void ws_server::bindaddRemoteCandidateFunc(std::function<void(const std::string&, const std::string&)> callback)
 {
     addRemoteCandidateFunc_ = callback;
 }
 
 void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
 {
-    ws->onOpen([this]()
+    ws->onOpen([]()
                { PLOG_DEBUG << "WebSocket opened"; });
-
-    ws->onMessage([](rtc::binary data) {}, [this](std::string message)
+    auto self = shared_from_this();
+    ws->onMessage([](rtc::binary data) {}, [self](std::string message)
                   {
                     try {
                     PLOG_DEBUG << "Received message: " << message;
@@ -72,7 +72,7 @@ void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
                             return;
                         }
                         std::string sdp = message_json["description"];
-                        this->setRemoteDescriptionFunc_(sdp,type);
+                        self->setRemoteDescriptionFunc_(sdp,type);
                         //this->pc_->setRemoteDescription(rtc::Description(sdp,type));
                     }
                     else if(type == "verify")
@@ -86,8 +86,8 @@ void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
                                 json j;
                                 j["type"] = "verify";
                                 j["result"] = "success";
-                                this->loginSuccessFunc_(id_card_);
-                                this->ws_->send(j.dump());
+                                self->loginSuccessFunc_(self->id_card_);
+                                self->ws_->send(j.dump());
                             }
                         }
                         else
@@ -96,7 +96,7 @@ void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
                             json j;
                             j["status"] = "failed";
                             j["type"] = "verify";
-                            this->ws_->send(j.dump());
+                            self->ws_->send(j.dump());
                         }
                     }
                     else if(type == "candidate")
@@ -114,7 +114,7 @@ void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
 
                         std::string candidate = message_json["candidate"];
                         std::string mid = message_json["mid"].get<std::string>();
-                        this->addRemoteCandidateFunc_(candidate,mid);
+                        self->addRemoteCandidateFunc_(candidate,mid);
                         //this->pc_->addRemoteCandidate(rtc::Candidate(candidate, mid));
                     }
                     else
@@ -131,9 +131,13 @@ void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
 
                     PLOG_DEBUG << "Received: "
                                << message; });
+
     ws->onClosed([this]()
                  { 
-                    close_func_(id_card_);
+                    if(close_func_)
+                    {
+                        close_func_(id_card_);
+                    }
                     PLOG_DEBUG << "WebSocket closed"; });
 
     ws->onError([](std::string message)
@@ -166,17 +170,30 @@ void p2p_server::init(rtc::Configuration config)
 
 void p2p_server::send(rtc::message_variant message)
 {
-    dc_->send(message);
+    if(dc_&&dc_->isOpen())
+    {
+        dc_->send(message);
+    }
 }
 
 void p2p_server::send(std::byte *data, size_t size)
 {
-    dc_->send(data, size);
+    if(dc_&&dc_->isOpen())
+    {
+        dc_->send(data, size);
+    }
 }
 
 void p2p_server::close()
 {
-    pc_->close();
+    if(dc_&&dc_->isOpen())
+    {
+        dc_->close();
+    }
+    if(pc_&&pc_->state() == rtc::PeerConnection::State::Connected)
+    {
+        pc_->close();
+    }
 }
 
 void p2p_server::bindCloseFunc(std::function<void(uint32_t)> cb)
@@ -194,12 +211,12 @@ void p2p_server::bindDataChannel(std::function<void(rtc::binary)> callback)
     data_channel_binary_callback_ = callback;
 }
 
-void p2p_server::setRemoteDescription(std::string sdp, std::string type)
+void p2p_server::setRemoteDescription(const std::string& sdp, const std::string& type)
 {
     pc_->setRemoteDescription(rtc::Description(sdp, type));
 }
 
-void p2p_server::addRemoteCandidate(std::string candidate, std::string mid)
+void p2p_server::addRemoteCandidate(const std::string& candidate, const std::string& mid)
 {
     pc_->addRemoteCandidate(rtc::Candidate(candidate, mid));
 }
@@ -216,16 +233,19 @@ void p2p_server::createDataChannel(std::shared_ptr<rtc::DataChannel> dc)
     dc_->onError([](std::string message)
                  { PLOG_ERROR << "DataChannel error: " << message; });
 
-    dc_->onMessage([this](rtc::binary message)
+    auto self = shared_from_this();
+    dc_->onMessage([self](rtc::binary message)
                    {
-        if(this->data_channel_binary_callback_)
+        if(self->data_channel_binary_callback_)
         {
-            this->data_channel_binary_callback_(message);
+            self->data_channel_binary_callback_(message);
         }
         else
         {
             PLOG_DEBUG << "DataChannel binary message: " << message.size() << " bytes";
-        } }, [this](std::string message)
+        } }, 
+        
+        [](std::string message)
                    { PLOG_DEBUG << "DataChannel message: " << message; });
 }
 
@@ -233,11 +253,15 @@ void p2p_server::createPeerConnection()
 {
     pc_ = std::make_shared<rtc::PeerConnection>(p2p_config_);
 
-    pc_->onStateChange([this](rtc::PeerConnection::State state)
+    auto self = shared_from_this();
+    pc_->onStateChange([self](rtc::PeerConnection::State state)
                        { 
                         if(state == rtc::PeerConnection::State::Closed)
                         {
-                            close_func_(id_card_);
+                            if(self->close_func_)
+                            {
+                                self->close_func_(self->id_card_);
+                            }
                         }
                         PLOG_DEBUG << "PeerConnection state: "
                                    << static_cast<int>(state); });
@@ -246,29 +270,35 @@ void p2p_server::createPeerConnection()
                                 { PLOG_DEBUG << "Gathering state: "
                                             << static_cast<int>(state); });
 
-    pc_->onLocalCandidate([this](rtc::Candidate candidate)
+    pc_->onLocalCandidate([self](rtc::Candidate candidate)
                           { 
                             json j;
                             j["type"] = "candidate";
                             j["candidate"] = candidate;
                             j["mid"] = candidate.mid();
-                            this->send_func_(j.dump());
+                            if(self->send_func_)
+                            {
+                                self->send_func_(j.dump());
+                            }
                             //this->ws_->send(j.dump());
                             PLOG_DEBUG << "Local candidate: "
                                       << candidate; });
 
-    pc_->onLocalDescription([this](rtc::Description description)
+    pc_->onLocalDescription([self](rtc::Description description)
                             { 
                                 json j;
                                 j["type"]="answer";
                                 j["description"]=description;
-                                this->send_func_(j.dump());
+                                if(self->send_func_)
+                                {
+                                    self->send_func_(j.dump());
+                                }
                                 //this->ws_->send(j.dump());
                                 PLOG_DEBUG << "Local description: "
                                         << description; });
 
-    pc_->onDataChannel([this](std::shared_ptr<rtc::DataChannel> dc)
+    pc_->onDataChannel([self](std::shared_ptr<rtc::DataChannel> dc)
                        {
                           PLOG_DEBUG << "New DataChannel";
-                          createDataChannel(dc); });
+                          self->createDataChannel(dc); });
 }

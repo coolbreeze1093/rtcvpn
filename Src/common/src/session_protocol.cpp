@@ -96,9 +96,12 @@ namespace p2psocks
         size_t len,
         std::string &host,
         uint16_t &port,
-        std::shared_ptr<std::vector<uint8_t>> data)
+        std::shared_ptr<std::vector<uint8_t>>& data)
     {
-
+        if(!data)
+        {
+            data = std::make_shared<std::vector<uint8_t>>();
+        }
         if (!buf || len < 1)
         {
             return false;

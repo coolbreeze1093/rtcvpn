@@ -3,19 +3,23 @@
 #include "socks5.h"
 #include "p2p_client.h"
 #include <plog/Log.h>
+#include <fstream>
+#include "rtc_logger.h"
 
 std::atomic<bool> running{true};
 void signal_handler(int signal)
 {
     running = false;
 }
+
 int main(int argc, char *argv[])
 {
+    RtcLogger::instance().init("rtc_client.log");
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
     PLOG_INFO << "RTC WebRTC C++";
-    rtc::InitLogger(rtc::LogLevel::Info);
+    rtc::InitLogger(rtc::LogLevel::Debug, rtcLogCallback);
     rtc::Configuration config;
     config.iceServers = {
         {"stun.miwifi.com", 3478},
@@ -86,6 +90,7 @@ int main(int argc, char *argv[])
     }
 
     client.disconnect();
+    RtcLogger::instance().shutdown();
 
     return 0;
 }

@@ -391,7 +391,6 @@ void Socks5Session::request_remote_connect()
                                     return;
                                 }
                                 auto self = weak_self.lock();
-                                self->socket_.close(); 
                                 self->close();
                             });
 
@@ -522,16 +521,25 @@ void Socks5Session::print_error(const std::string &msg)
 
 void Socks5Session::close()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!is_closed_)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (is_closed_)
+            return;
+
         is_closed_ = true;
     }
-    else
+
+    std::error_code ec;
+    socket_.close(ec);
+
+    if (ec)
     {
-        return;
+        PLOG_ERROR << "socket close error: " << ec.message()
+                   << ", value=" << ec.value();
     }
+    
     if(on_close_)
         on_close_(session_id_);
-    socket_.close();
+    
 }

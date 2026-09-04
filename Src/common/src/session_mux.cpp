@@ -112,7 +112,7 @@ namespace p2psocks
 
             std::string host;
             uint16_t port;
-            std::shared_ptr<std::vector<uint8_t>> data = std::make_shared<std::vector<uint8_t>>();
+            std::shared_ptr<std::vector<uint8_t>> data = nullptr;
             if (!decode_udp_payload(payload, plen, host, port, data))
             {
                 PLOG_WARNING << "invalid udp payload stream_id "<<h.stream_id;

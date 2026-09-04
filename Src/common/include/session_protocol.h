@@ -82,7 +82,7 @@ namespace p2psocks
         size_t len,
         std::string &host,
         uint16_t &port,
-        std::shared_ptr<std::vector<uint8_t>> data);
+        std::shared_ptr<std::vector<uint8_t>>& data);
 
     std::vector<std::byte> packMessage(const uint8_t *data, size_t len);
 

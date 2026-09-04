@@ -1,4 +1,6 @@
 #include "process_new_client.h"
+#include <fstream>
+#include "rtc_logger.h"
 
 std::atomic<bool> running{true};
 void signal_handler(int signal)
@@ -8,9 +10,10 @@ void signal_handler(int signal)
 
 int main()
 {
+    RtcLogger::instance().init("rtc_server.log");
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
-    rtc::InitLogger(rtc::LogLevel::Info);
+    rtc::InitLogger(rtc::LogLevel::Debug, rtcLogCallback);
     PLOG_INFO << "RTC WebRTC C++ Server Started";
 
     rtc::Configuration config;
@@ -54,6 +57,7 @@ int main()
     {
         PLOG_ERROR << "异常: " << e.what() << "\n";
     }
+    RtcLogger::instance().shutdown();
 
     return 0;
 }

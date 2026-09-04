@@ -26,9 +26,9 @@ public:
 
     void bindLoginSuccess(std::function<void(uint32_t)> callback);
 
-    void bindsetRemoteDescriptionFunc(std::function<void(std::string, std::string)> callback);
+    void bindsetRemoteDescriptionFunc(std::function<void(const std::string&, const std::string&)> callback);
 
-    void bindaddRemoteCandidateFunc(std::function<void(std::string, std::string)> callback);
+    void bindaddRemoteCandidateFunc(std::function<void(const std::string&, const std::string&)> callback);
 
     void bindWebSocket(std::shared_ptr<rtc::WebSocket> ws);
 
@@ -36,8 +36,8 @@ public:
 
 private:
     std::shared_ptr<rtc::WebSocket> ws_;
-    std::function<void(std::string, std::string)> setRemoteDescriptionFunc_;
-    std::function<void(std::string, std::string)> addRemoteCandidateFunc_;
+    std::function<void(const std::string&, const std::string&)> setRemoteDescriptionFunc_;
+    std::function<void(const std::string&, const std::string&)> addRemoteCandidateFunc_;
     std::function<void(uint32_t)> loginSuccessFunc_;
     std::function<void(uint32_t)> close_func_;
 
@@ -65,9 +65,9 @@ public:
 
     void bindDataChannel(std::function<void(rtc::binary)> callback);
 
-    void setRemoteDescription(std::string sdp, std::string type);
+    void setRemoteDescription(const std::string& sdp, const std::string& type);
 
-    void addRemoteCandidate(std::string candidate, std::string mid);
+    void addRemoteCandidate(const std::string& candidate, const std::string& mid);
 
     void createDataChannel(std::shared_ptr<rtc::DataChannel> dc);
 

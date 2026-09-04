@@ -28,7 +28,7 @@ private:
     rtc::Configuration &config_;
     uint32_t session_id_;
 
-    SessionMux mux_; // 独立的 mux，每个 session 一份
+    std::shared_ptr<SessionMux> mux_; // 独立的 mux，每个 session 一份
 
     std::shared_ptr<ws_server> ws_;
     std::shared_ptr<p2p_server> p2p_;

@@ -5,11 +5,19 @@
 using asio::ip::tcp;
 using namespace p2psocks;
 
-TcpSession::TcpSession(asio::io_context &io, SessionMux &mux,
+TcpSession::TcpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
               uint32_t session_id)
-    : io_(io), mux_(mux), target_socket_(io)
+    : io_(io), weak_mux_(weak_mux), target_socket_(io)
 {
-    session_ = mux_.create_session(session_id);
+    if(weak_mux_.expired())
+    {
+        PLOG_ERROR << "weak_mux is expired";
+        return;
+    }
+    else
+    {
+        session_ = weak_mux_.lock()->create_session(session_id);
+    }
     PLOG_DEBUG << "TcpSession created, stream_id=" << session_->stream_id();
 }
 
@@ -17,7 +25,15 @@ TcpSession::~TcpSession()
 {
     if (session_)
     {
-        mux_.remove_session(session_->stream_id());
+        if(weak_mux_.expired())
+        {
+            PLOG_ERROR << "weak_mux is expired";
+            return;
+        }
+        else
+        {
+            weak_mux_.lock()->remove_session(session_->stream_id());
+        }
     }
     PLOG_DEBUG << "TcpSession close, stream_id=" << session_->stream_id();
 }
@@ -44,7 +60,15 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
             if (ec)
             {
                 PLOG_ERROR << "resolve host failed " << ec.message();
-                mux_.send_synack(session_->stream_id(), false);
+                if(weak_mux_.expired())
+                {
+                    PLOG_ERROR << "weak_mux is expired";
+                    return;
+                }
+                else
+                {
+                    weak_mux_.lock()->send_synack(session_->stream_id(), false);
+                }
                 close();
                 return;
             }
@@ -55,13 +79,29 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                     if (ec)
                     {
                         PLOG_ERROR << "connect target failed, " << ec.message();
-                        mux_.send_synack(session_->stream_id(), false);
+                        if(weak_mux_.expired())
+                        {
+                            PLOG_ERROR << "weak_mux is expired";
+                            return;
+                        }
+                        else
+                        {
+                            weak_mux_.lock()->send_synack(session_->stream_id(), false);
+                        }
                         close();
                         return;
                     }
                     PLOG_DEBUG << "connect target success, stream_id="
                               << session_->stream_id();
-                    mux_.send_synack(session_->stream_id(), true);
+                    if(weak_mux_.expired())
+                    {
+                        PLOG_ERROR << "weak_mux is expired";
+                        return;
+                    }
+                    else
+                    {
+                        weak_mux_.lock()->send_synack(session_->stream_id(), true);
+                    }
                     setup_session_callbacks();
                     do_read_from_target();
                 });
@@ -76,7 +116,10 @@ void TcpSession::setup_session_callbacks()
                           {
         // 来自本地端(浏览器)的数据 -> 写给目标服务器
         if(weak_self.expired())
+        {
+            PLOG_ERROR << "weak_self is expired";
             return;
+        }
         auto self = weak_self.lock();
 
         bool writing = !self->to_target_queue_.empty();
@@ -85,9 +128,11 @@ void TcpSession::setup_session_callbacks()
     session_->set_on_close([weak_self]()
                            {
         if(weak_self.expired())
+        {
+            PLOG_ERROR << "weak_self is expired";
             return;
+        }
         auto self = weak_self.lock();
-
         std::error_code ec;
         self->target_socket_.close(ec);
         self->close(); });
@@ -122,11 +167,27 @@ void TcpSession::do_read_from_target()
             if (ec)
             {
                 PLOG_ERROR << "do_read_from_target error, stream_id=" << session_->stream_id();
-                mux_.send_fin(session_->stream_id());
                 close();
+                if(weak_mux_.expired())
+                {
+                    PLOG_ERROR << "weak_mux is expired";
+                    return;
+                }
+                else
+                {
+                    weak_mux_.lock()->send_fin(session_->stream_id());
+                }
                 return;
             }
-            mux_.send_data(session_->stream_id(), target_buf_.data(), n);
+            if(weak_mux_.expired())
+            {
+                PLOG_ERROR << "weak_mux is expired";
+                return;
+            }
+            else
+            {
+                weak_mux_.lock()->send_data(session_->stream_id(), target_buf_.data(), n);
+            }
             do_read_from_target();
         });
 }

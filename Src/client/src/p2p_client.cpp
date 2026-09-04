@@ -19,13 +19,13 @@ void p2p_client::connect(std::string url)
 
 void p2p_client::send(rtc::message_variant message)
 {
-    if (dc_)
+    if (dc_&&dc_->isOpen())
         dc_->send(message);
 }
 
 void p2p_client::send(const std::byte *data, size_t size)
 {
-    if (dc_)
+    if (dc_&&dc_->isOpen())
         dc_->send(data, size);
 }
 
@@ -116,7 +116,14 @@ void p2p_client::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
                                << std::endl; });
     ws->onClosed([this]()
                  { 
-                    pc_->close();
+                    if(dc_&&dc_->isOpen())
+                    {
+                        dc_->close();
+                    }
+                    if(pc_&&pc_->state() == rtc::PeerConnection::State::Connected)
+                    {
+                        pc_->close();
+                    }
                     PLOG_INFO << "WebSocket closed"; });
 
     ws->onError([](std::string message)

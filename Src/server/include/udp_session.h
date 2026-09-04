@@ -14,7 +14,7 @@ using Session = p2psocks::Session;
 class UdpClient : public std::enable_shared_from_this<UdpClient>
 {
 public:
-    UdpClient(asio::io_context &io_context, SessionMux &mux, uint32_t session_id);
+    UdpClient(asio::io_context &io_context, std::weak_ptr<SessionMux> weak_mux, uint32_t session_id);
 
     ~UdpClient();
 
@@ -37,7 +37,7 @@ private:
     udp::socket socket_;
     udp::endpoint server_endpoint_;
     udp::endpoint sender_endpoint_;
-    SessionMux &mux_;
+    std::weak_ptr<SessionMux> weak_mux_;
     std::vector<uint8_t> recv_buf_;
     std::shared_ptr<Session> session_;
 
