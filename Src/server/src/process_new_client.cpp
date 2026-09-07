@@ -13,6 +13,11 @@ Socks5Session::Socks5Session(asio::io_context &io,
 Socks5Session::~Socks5Session()
 {
     PLOG_DEBUG << "Socks5Session destroyed  " << session_id_;
+    mux_.reset();
+    p2p_.reset();
+    ws_.reset();
+    tcp_sessions_.clear(); // mux 没了，底下挂的转发也该一并清理
+    udp_sessions_.clear();
 }
 
 void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
@@ -101,13 +106,6 @@ void Socks5Session::onLoginSuccess()
                             {
                                 PLOG_ERROR << "weak_this is expired";
                                 return;
-                            }
-                            auto self = weak_this.lock();
-                            if (self)
-                            {
-                                self->p2p_.reset();
-                                self->tcp_sessions_.clear(); // mux 没了，底下挂的转发也该一并清理
-                                self->udp_sessions_.clear();
                             }
                             // 通知 ws 关闭
                         });

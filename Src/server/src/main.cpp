@@ -8,7 +8,7 @@ void signal_handler(int signal)
     running = false;
 }
 
-int main()
+int main(int argc, char *argv[])
 {
     RtcLogger::instance().init("rtc_server.log");
     std::signal(SIGINT, signal_handler);

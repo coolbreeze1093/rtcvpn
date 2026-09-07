@@ -159,45 +159,94 @@ namespace p2psocks
         auto payload = encode_syn_payload(host, port);
         auto frame = make_frame(stream_id, FrameType::SYN, payload.data(),
                                 payload.size());
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_syn: send_func_ is not set";
+        }
     }
 
     void SessionMux::send_synack(uint32_t stream_id, bool ok)
     {
         uint8_t status = ok ? 0 : 1;
         auto frame = make_frame(stream_id, FrameType::SYNACK, &status, 1);
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_synack: send_func_ is not set";
+        }
     }
 
     void SessionMux::send_data(uint32_t stream_id, const uint8_t *data, size_t len)
     {
         auto frame = make_frame(stream_id, FrameType::DATA, data, len);
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_data: send_func_ is not set";
+        }
     }
 
     void SessionMux::send_fin(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::FIN);
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_fin: send_func_ is not set";
+        }
     }
 
     void SessionMux::send_udp_syn(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::UDP_SYN);
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_udp_syn: send_func_ is not set";
+        }
     }
 
     void SessionMux::send_udp_synack(uint32_t stream_id, bool ok)
     {
         uint8_t status = ok ? 0 : 1;
         auto frame = make_frame(stream_id, FrameType::UDP_SYNACK, &status, 1);
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_udp_synack: send_func_ is not set";
+        }
     }
 
     void SessionMux::send_udp_fin(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::UDP_FIN);
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_udp_fin: send_func_ is not set";
+        }
     }
 
     void SessionMux::send_udp(uint32_t stream_id, const std::string&host, uint16_t port,
@@ -205,7 +254,14 @@ namespace p2psocks
     {
         auto payload = encode_udp_payload(host, port, data);
         auto frame = make_frame(stream_id, FrameType::UDP_DATA, payload.data(), payload.size());
-        send_func_(peer_conn_id_, frame.data(), frame.size());
+        if(send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_udp: send_func_ is not set";
+        }
     }
 
     uint32_t SessionMux::gen_stream_id()

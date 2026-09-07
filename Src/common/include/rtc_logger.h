@@ -26,6 +26,49 @@ inline const char* logLevelToString(rtc::LogLevel level) {
     }
 }
 
+#include <filesystem>
+#include <string>
+
+#ifdef _WIN32
+    #include <windows.h>
+#elif __APPLE__
+    #include <mach-o/dyld.h>
+#else // Linux
+    #include <unistd.h>
+    #include <limits.h>
+#endif
+
+namespace fs = std::filesystem;
+
+fs::path getExecutableDir() {
+#ifdef _WIN32
+    wchar_t buf[MAX_PATH];
+    GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    return fs::path(buf).parent_path();
+
+#elif __APPLE__
+    char buf[PATH_MAX];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) {
+        // buf 太小，需要更大的缓冲区（极少发生）
+        std::vector<char> bigBuf(size);
+        _NSGetExecutablePath(bigBuf.data(), &size);
+        return fs::canonical(fs::path(bigBuf.data())).parent_path();
+    }
+    return fs::canonical(fs::path(buf)).parent_path();
+
+#else // Linux
+    char buf[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len != -1) {
+        buf[len] = '\0';
+        return fs::path(buf).parent_path();
+    }
+    return fs::current_path(); // 兜底方案
+
+#endif
+}
+
 class RtcLogger {
 public:
     static RtcLogger& instance() {
@@ -34,7 +77,9 @@ public:
     }
 
     void init(const std::string& filepath) {
-        file_.open(filepath, std::ios::out | std::ios::app);
+        auto exec_dir = getExecutableDir();
+        std::string log_path = exec_dir.string() + "/" + filepath;
+        file_.open(log_path, std::ios::out | std::ios::app);
         running_ = true;
         worker_ = std::thread(&RtcLogger::workerLoop, this);
     }
