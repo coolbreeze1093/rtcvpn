@@ -23,6 +23,7 @@ void ws_server::connect(std::shared_ptr<rtc::WebSocket> ws)
 
 void ws_server::disconnect()
 {
+    if(ws_->isOpen())
     ws_->close();
 }
 

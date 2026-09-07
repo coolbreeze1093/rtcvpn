@@ -1,13 +1,14 @@
 #include "tcp_session.h"
 #include <plog/Log.h>
 #include <asio.hpp>
+#include "tcp_session.h"
 
 using asio::ip::tcp;
 using namespace p2psocks;
 
 TcpSession::TcpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
-              uint32_t session_id)
-    : io_(io), weak_mux_(weak_mux), target_socket_(io)
+              uint32_t stream_id)
+    : io_(io), weak_mux_(weak_mux), target_socket_(io), stream_id_(stream_id)
 {
     if(weak_mux_.expired())
     {
@@ -16,9 +17,9 @@ TcpSession::TcpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
     }
     else
     {
-        session_ = weak_mux_.lock()->create_session(session_id);
+        session_ = weak_mux_.lock()->create_session(stream_id_);
     }
-    PLOG_DEBUG << "TcpSession created, stream_id=" << session_->stream_id();
+    PLOG_DEBUG << "TcpSession created, stream_id=" << stream_id_;
 }
 
 TcpSession::~TcpSession()
@@ -32,10 +33,10 @@ TcpSession::~TcpSession()
         }
         else
         {
-            weak_mux_.lock()->remove_session(session_->stream_id());
+            weak_mux_.lock()->remove_session(stream_id_);
         }
     }
-    PLOG_DEBUG << "TcpSession close, stream_id=" << session_->stream_id();
+    PLOG_DEBUG << "TcpSession close, stream_id=" << stream_id_;
 }
 
 void TcpSession::bind_close_func(std::function<void(uint32_t session_id)> func)
@@ -43,13 +44,10 @@ void TcpSession::bind_close_func(std::function<void(uint32_t session_id)> func)
     close_func_ = func;
 }
 
-void TcpSession::set_session_id(uint32_t session_id)
-{
-    session_id_ = session_id;
-}
-
 void TcpSession::connect_target(const std::string &host, uint16_t port)
 {
+    host_ = host;
+    port_ = port;
     auto self(shared_from_this());
     auto resolver = std::make_shared<tcp::resolver>(io_);
     resolver->async_resolve(
@@ -67,9 +65,9 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                 }
                 else
                 {
-                    weak_mux_.lock()->send_synack(session_->stream_id(), false);
+                    weak_mux_.lock()->send_synack(stream_id_, false);
                 }
-                close();
+                close_func();
                 return;
             }
             asio::async_connect(
@@ -78,7 +76,8 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                 {
                     if (ec)
                     {
-                        PLOG_ERROR << "connect target failed, " << ec.message();
+                        PLOG_ERROR << "connect target failed, stream_id=" << stream_id_
+                                  << ", " << ec.message();
                         if(weak_mux_.expired())
                         {
                             PLOG_ERROR << "weak_mux is expired";
@@ -86,13 +85,13 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                         }
                         else
                         {
-                            weak_mux_.lock()->send_synack(session_->stream_id(), false);
+                            weak_mux_.lock()->send_synack(stream_id_, false);
                         }
-                        close();
+                        close_func();
                         return;
                     }
                     PLOG_DEBUG << "connect target success, stream_id="
-                              << session_->stream_id();
+                              << stream_id_ << ", host=" << host_ << ", port=" << port_;
                     if(weak_mux_.expired())
                     {
                         PLOG_ERROR << "weak_mux is expired";
@@ -100,12 +99,26 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                     }
                     else
                     {
-                        weak_mux_.lock()->send_synack(session_->stream_id(), true);
+                        weak_mux_.lock()->send_synack(stream_id_, true);
                     }
                     setup_session_callbacks();
                     do_read_from_target();
                 });
         });
+}
+
+void TcpSession::close()
+{
+    if(target_socket_.is_open())
+    {
+        std::error_code ec;
+        target_socket_.close(ec);
+        if (ec)
+        {
+            PLOG_ERROR << "target close error: " << ec.message()
+                       << ", value=" << ec.value();
+        }
+    }
 }
 
 void TcpSession::setup_session_callbacks()
@@ -133,8 +146,6 @@ void TcpSession::setup_session_callbacks()
             return;
         }
         auto self = weak_self.lock();
-        std::error_code ec;
-        self->target_socket_.close(ec);
         self->close(); });
 }
 
@@ -147,8 +158,8 @@ void TcpSession::do_write_to_target()
         {
             if (ec)
             {
-                PLOG_ERROR << "do_write_to_target error, stream_id=" << session_->stream_id();
-                close();
+                PLOG_ERROR << "do_write_to_target error, stream_id=" << stream_id_;
+                close_func();
                 return;
             }
             to_target_queue_.pop_front();
@@ -166,8 +177,8 @@ void TcpSession::do_read_from_target()
         {
             if (ec)
             {
-                PLOG_ERROR << "do_read_from_target error, stream_id=" << session_->stream_id();
-                close();
+                PLOG_ERROR << "do_read_from_target error, stream_id=" << stream_id_;
+                close_func();
                 if(weak_mux_.expired())
                 {
                     PLOG_ERROR << "weak_mux is expired";
@@ -175,7 +186,7 @@ void TcpSession::do_read_from_target()
                 }
                 else
                 {
-                    weak_mux_.lock()->send_fin(session_->stream_id());
+                    weak_mux_.lock()->send_fin(stream_id_);
                 }
                 return;
             }
@@ -186,19 +197,19 @@ void TcpSession::do_read_from_target()
             }
             else
             {
-                weak_mux_.lock()->send_data(session_->stream_id(), target_buf_.data(), n);
+                weak_mux_.lock()->send_data(stream_id_, target_buf_.data(), n);
             }
             do_read_from_target();
         });
 }
 
-void TcpSession::close()
+void TcpSession::close_func()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!is_closed_)
     {
         is_closed_ = true;
         if (close_func_)
-            close_func_(session_id_);
+            close_func_(stream_id_);
     }
 }

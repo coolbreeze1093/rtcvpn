@@ -273,6 +273,8 @@ void Socks5Session::request_remote_connect_for_udp()
                                     }
                                     auto self = weak_self.lock();
                                     self->do_connect_upstream_and_tunnel_for_udp(ok); });
+    PLOG_INFO << "request_remote connect for udp, stream_id=" << session_->stream_id()
+              << ", target_host=" << target_host_ << ", target_port=" << target_port_;
     mux_.send_udp_syn(session_->stream_id());
 }
 

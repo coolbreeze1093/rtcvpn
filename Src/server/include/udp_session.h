@@ -14,7 +14,7 @@ using Session = p2psocks::Session;
 class UdpClient : public std::enable_shared_from_this<UdpClient>
 {
 public:
-    UdpClient(asio::io_context &io_context, std::weak_ptr<SessionMux> weak_mux, uint32_t session_id);
+    UdpClient(asio::io_context &io_context, std::weak_ptr<SessionMux> weak_mux, uint32_t stream_id);
 
     ~UdpClient();
 
@@ -22,7 +22,7 @@ public:
 
     void bind_close_func(std::function<void(uint32_t session_id)> close_func);
 
-    void set_session_id(int32_t session_id);
+    void close();
 
 private:
     void send(std::shared_ptr<std::vector<uint8_t>> data, const std::string &target_host, int target_port);
@@ -31,7 +31,7 @@ private:
 
     void start_receive();
 
-    void close();
+    void close_func();
 
     asio::io_context &io_;
     udp::socket socket_;
@@ -43,7 +43,7 @@ private:
 
     std::deque<p2psocks::SendData> send_queue_;
     std::function<void(uint32_t session_id)> close_func_;
-    int32_t session_id_{0};
+    int32_t stream_id_{0};
 
     bool sending_{false};
     std::mutex mutex_;

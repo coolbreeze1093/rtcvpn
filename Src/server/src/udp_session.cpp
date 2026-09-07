@@ -1,25 +1,23 @@
 #include "udp_session.h"
 #include <plog/Log.h>
 #include <asio.hpp>
+#include "udp_session.h"
 
 using SendData = p2psocks::SendData;
 
-UdpClient::UdpClient(asio::io_context &io_context, std::weak_ptr<SessionMux> weak_mux, uint32_t session_id)
-    : io_(io_context)
-    ,socket_(io_context)
-    , weak_mux_(weak_mux)
-    , recv_buf_(65536)
+UdpClient::UdpClient(asio::io_context &io_context, std::weak_ptr<SessionMux> weak_mux, uint32_t stream_id)
+    : io_(io_context), socket_(io_context), weak_mux_(weak_mux), recv_buf_(65536), stream_id_(stream_id)
 {
-    if(weak_mux_.expired())
+    if (weak_mux_.expired())
     {
         PLOG_ERROR << "weak_mux is expired";
         return;
     }
     else
     {
-        session_ = weak_mux_.lock()->create_session(session_id);
+        session_ = weak_mux_.lock()->create_session(stream_id_);
     }
-    PLOG_DEBUG << "UdpClient created, session_id: " << session_id;
+    PLOG_DEBUG << "UdpClient created, stream_id: " << stream_id_;
 }
 
 UdpClient::~UdpClient()
@@ -27,14 +25,14 @@ UdpClient::~UdpClient()
     PLOG_DEBUG << "UdpClient destroyed";
     if (session_)
     {
-        if(weak_mux_.expired())
+        if (weak_mux_.expired())
         {
             PLOG_ERROR << "weak_mux is expired";
             return;
         }
         else
         {
-            weak_mux_.lock()->remove_session(session_->stream_id());
+            weak_mux_.lock()->remove_session(stream_id_);
         }
     }
 }
@@ -49,16 +47,16 @@ bool UdpClient::start()
         PLOG_ERROR
             << "open failed:"
             << ec.message();
-        if(weak_mux_.expired())
+        if (weak_mux_.expired())
         {
             PLOG_ERROR << "weak_mux is expired";
             return false;
         }
         else
         {
-            weak_mux_.lock()->send_udp_synack(session_->stream_id(), false);
+            weak_mux_.lock()->send_udp_synack(stream_id_, false);
         }
-        close();
+        close_func();
         return false;
     }
     socket_.bind(udp::endpoint(udp::v4(), 0), ec);
@@ -67,19 +65,19 @@ bool UdpClient::start()
         PLOG_ERROR
             << "bind failed:"
             << ec.message();
-        if(weak_mux_.expired())
+        if (weak_mux_.expired())
         {
             PLOG_ERROR << "weak_mux is expired";
             return false;
         }
         else
         {
-            weak_mux_.lock()->send_udp_synack(session_->stream_id(), false);
+            weak_mux_.lock()->send_udp_synack(stream_id_, false);
         }
-        close();
+        close_func();
         return false;
     }
-    PLOG_DEBUG << "UDP server listening on port " << socket_.local_endpoint().port() << ", session_id: " << session_id_;
+    PLOG_DEBUG << "UDP server listening on port " << socket_.local_endpoint().port() << ", stream_id: " << stream_id_;
 
     start_receive();
 
@@ -104,15 +102,15 @@ bool UdpClient::start()
                                  }
                                  auto self = weak_self.lock();
                                  self->close();
-                                 PLOG_DEBUG << "UdpClient close, session_id: " << self->session_id_; });
-    if(weak_mux_.expired())
+                                 PLOG_DEBUG << "UdpClient close, stream_id: " << self->stream_id_; });
+    if (weak_mux_.expired())
     {
         PLOG_ERROR << "weak_mux is expired";
         return false;
     }
     else
     {
-        weak_mux_.lock()->send_udp_synack(session_->stream_id(), true);
+        weak_mux_.lock()->send_udp_synack(stream_id_, true);
     }
 
     return true;
@@ -123,9 +121,18 @@ void UdpClient::bind_close_func(std::function<void(uint32_t session_id)> close_f
     this->close_func_ = std::move(close_func);
 }
 
-void UdpClient::set_session_id(int32_t session_id)
+void UdpClient::close()
 {
-    this->session_id_ = session_id;
+    if (socket_.is_open())
+    {
+        std::error_code ec;
+        socket_.close(ec);
+        if (ec)
+        {
+            PLOG_ERROR << "socket close_func error: " << ec.message()
+                       << ", value=" << ec.value();
+        }
+    }
 }
 
 void UdpClient::send(std::shared_ptr<std::vector<uint8_t>> data, const std::string &target_host, int target_port)
@@ -161,16 +168,16 @@ void UdpClient::do_send_next()
                 return;
             }
 
-            //auto endpoint = results.begin()->endpoint();
+            // auto endpoint = results.begin()->endpoint();
 
             // 关键日志：打印实际解析出来的地址、端口、协议族
-            //PLOG_INFO << "resolved endpoint: "
+            // PLOG_INFO << "resolved endpoint: "
             //          << endpoint.address().to_string()
             //          << ":" << endpoint.port()
             //          << " (is_v4=" << endpoint.address().is_v4()
             //          << ", is_v6=" << endpoint.address().is_v6() << ")";
-//
-            //PLOG_INFO << "send data size: " << data->size();
+            //
+            // PLOG_INFO << "send data size: " << data->size();
 
             socket_.async_send_to(
                 asio::buffer(*data),
@@ -181,10 +188,10 @@ void UdpClient::do_send_next()
                     {
                         PLOG_ERROR << "send error: "
                                    << ec.message();
-                        self->close();
+                        self->close_func();
                         return;
                     }
-                    //PLOG_INFO << "send success, bytes_sent: " << bytes_sent;
+                    // PLOG_INFO << "send success, bytes_sent: " << bytes_sent;
                     self->send_queue_.pop_front();
                     if (!self->send_queue_.empty())
                     {
@@ -212,28 +219,28 @@ void UdpClient::start_receive()
                 uint16_t port = self->sender_endpoint_.port();
 
                 std::vector<uint8_t> reply(self->recv_buf_.begin(), self->recv_buf_.begin() + bytes_recvd);
-                if(self->weak_mux_.expired())
+                if (self->weak_mux_.expired())
                 {
                     PLOG_ERROR << "weak_mux is expired";
                     return;
                 }
                 else
                 {
-                    self->weak_mux_.lock()->send_udp(self->session_->stream_id(), host, port, reply);
+                    self->weak_mux_.lock()->send_udp(self->stream_id_, host, port, reply);
                 }
                 self->start_receive();
             }
             else
             {
                 PLOG_ERROR << "receive error: " << ec.message();
-                self->close();
+                self->close_func();
             }
         });
 }
 
-void UdpClient::close()
+void UdpClient::close_func()
 {
-     {
+    {
         std::lock_guard<std::mutex> lock(mutex_);
 
         if (is_closed_)
@@ -242,17 +249,8 @@ void UdpClient::close()
         is_closed_ = true;
     }
 
-    std::error_code ec;
-    socket_.close(ec);
-
-    if (ec)
-    {
-        PLOG_ERROR << "socket close error: " << ec.message()
-                   << ", value=" << ec.value();
-    }
-
     if (close_func_)
     {
-        close_func_(session_id_);
+        close_func_(stream_id_);
     }
 }

@@ -21,15 +21,15 @@ class TcpSession : public std::enable_shared_from_this<TcpSession>
 {
 public:
     TcpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
-              uint32_t session_id);
+              uint32_t stream_id);
 
     ~TcpSession();
 
-    void bind_close_func(std::function<void(uint32_t session_id)> func);
-
-    void set_session_id(uint32_t session_id);
+    void bind_close_func(std::function<void(uint32_t stream_id)> func);
 
     void connect_target(const std::string &host, uint16_t port);
+
+    void close();
 
 private:
     void setup_session_callbacks();
@@ -38,7 +38,7 @@ private:
 
     void do_read_from_target();
 
-    void close();
+    void close_func();
 
     asio::io_context &io_;
     std::weak_ptr<SessionMux> weak_mux_;
@@ -48,8 +48,8 @@ private:
     std::array<uint8_t, 8192> target_buf_{};
     std::deque<std::vector<uint8_t>> to_target_queue_;
     bool is_closed_ = false;
-
-    uint32_t session_id_ = 0;
-
+    uint32_t stream_id_ = 0;
     std::mutex mutex_;
+    std::string host_;
+    uint16_t port_ = 0;
 };

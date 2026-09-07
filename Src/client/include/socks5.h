@@ -15,6 +15,7 @@
 #include "session_mux.h"
 #include "session_id_generator.h"
 #include "tcp_session.h"
+#include <mutex>
 
 using asio::ip::tcp;
 using SessionMux = p2psocks::SessionMux;
@@ -24,6 +25,10 @@ class SocksServer
 public:
     SocksServer(asio::io_context &io, uint16_t port, SessionMux &mux);
 
+    void start();
+
+    void stop();
+
 private:
     void do_accept();
 
@@ -32,4 +37,6 @@ private:
     asio::io_context &io_;
     std::unordered_map<uint32_t, std::shared_ptr<Socks5Session>> sessions_;
     SessionIdGenerator session_id_generator_;
+    uint16_t port_;
+    std::mutex sessions_mutex_;
 };

@@ -12,12 +12,10 @@ Socks5Session::Socks5Session(asio::io_context &io,
 
 Socks5Session::~Socks5Session()
 {
-    PLOG_DEBUG << "Socks5Session destroyed  " << session_id_;
-    mux_.reset();
+    PLOG_DEBUG << "~Socks5Session destroyed  " << session_id_;
     p2p_.reset();
     ws_.reset();
-    tcp_sessions_.clear(); // mux 没了，底下挂的转发也该一并清理
-    udp_sessions_.clear();
+    mux_.reset();
 }
 
 void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
@@ -107,6 +105,19 @@ void Socks5Session::onLoginSuccess()
                                 PLOG_ERROR << "weak_this is expired";
                                 return;
                             }
+                            if (auto self = weak_this.lock())
+                            {
+                                for (auto &session : self->tcp_sessions_)
+                                {
+                                    session.second->close();
+                                }
+                                for (auto &session : self->udp_sessions_)
+                                {
+                                    session.second->close();
+                                }
+                                self->ws_->disconnect();
+                            }
+                            
                             // 通知 ws 关闭
                         });
 
@@ -137,7 +148,7 @@ void Socks5Session::onLoginSuccess()
         } });
 
     mux_->set_send_func([weak_this](uint32_t conn_id, const uint8_t *data, size_t len)
-                       {
+                        {
         try
         {
             std::vector<std::byte> buf = p2psocks::packMessage(data, len);
@@ -160,8 +171,8 @@ void Socks5Session::onLoginSuccess()
 
     // 每个连接自己的 SessionMux，注册自己的 on_syn / on_udp_syn
     mux_->set_on_syn([weak_this](uint32_t stream_id,
-                                const std::string &host, uint16_t port)
-                    {
+                                 const std::string &host, uint16_t port)
+                     {
         if(weak_this.expired())
         {
             PLOG_ERROR << "weak_this is expired";
@@ -193,7 +204,7 @@ void Socks5Session::onLoginSuccess()
         rs->connect_target(host, port); });
 
     mux_->set_on_udp_syn([weak_this](uint32_t stream_id)
-                        {
+                         {
                             if(weak_this.expired())
         {
             PLOG_ERROR << "weak_this is expired";
