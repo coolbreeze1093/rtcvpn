@@ -1,10 +1,9 @@
 #include <csignal>
 #include <asio.hpp>
-#include "socks5.h"
-#include "p2p_client.h"
 #include <plog/Log.h>
 #include <fstream>
 #include "rtc_logger.h"
+#include "network_rtc_app.h"
 
 std::atomic<bool> running{true};
 void signal_handler(int signal)
@@ -12,143 +11,109 @@ void signal_handler(int signal)
     running = false;
 }
 
-class NetworkRtcApp
+void input_keyboard()
 {
-    public:
-        NetworkRtcApp(const std::string &signalingUrl,
-              const std::vector<std::pair<std::string, uint16_t>> &stunServers,
-              uint32_t peerConnId,asio::io_context & io_context);
-        ~NetworkRtcApp() = default;
-        void stop();
-        void start();
+    char c;
 
-    private:
-        std::string signaling_url_;
-        std::vector<std::pair<std::string, uint16_t>> stun_servers_;
-        uint32_t peer_conn_id_ = 0;
-        bool disconnected_ = false;
-        p2p_client client_;
-        SessionMux mux_;
-        SocksServer server_;
-        uint16_t socks5_server_port_ = 0;
-        asio::io_context & io_context_;
-
-};
-
-NetworkRtcApp::NetworkRtcApp(const std::string &signalingUrl,
-              const std::vector<std::pair<std::string, uint16_t>> &stunServers,
-              uint32_t peerConnId,asio::io_context & io_context):
-              signaling_url_(signalingUrl)
-              ,stun_servers_(stunServers)
-              ,io_context_(io_context)
-              ,mux_(peer_conn_id_)
-              ,server_(io_context_,socks5_server_port_,mux_)
-{
-    peer_conn_id_ = peerConnId;
-
-    RtcLogger::instance().init("rtc_client.log");
-    rtc::InitLogger(rtc::LogLevel::Debug, rtcLogCallback);
-
-    rtc::Configuration config;
-    for (const auto &[host, port] : stunServers)
+    while (running && std::cin.get(c))
     {
-        config.iceServers.push_back({host, port});
+        if (c == 'q' || c == 'Q')
+        {
+            PLOG_INFO << "input q, exit";
+
+            running = false;
+
+            // 如果 NetworkRtcApp 有 close/stop 方法
+            // app.close();
+            // 或者：
+            // app.stop();
+
+            break;
+        }
     }
-
-    client_.init(config);
-    client_.connect(signalingUrl);
 }
-
-void NetworkRtcApp::stop()
-{
-    server_.stop();
-}
-
-void NetworkRtcApp::start()
-{
-    server_.start();
-}
-
-
 
 int main(int argc, char *argv[])
 {
     RtcLogger::instance().init("rtc_client.log");
+
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
     PLOG_INFO << "RTC WebRTC C++";
     rtc::InitLogger(rtc::LogLevel::Debug, rtcLogCallback);
-    rtc::Configuration config;
-    config.iceServers = {
-        {"stun.miwifi.com", 3478},
+
+    std::string password_ = "test";
+    std::string signaling_url_ = "ws://localhost:8080";
+    uint16_t socks5_server_port = 10800;
+    std::string stun_url_ = "stun.miwifi.com:3478";
+    std::vector<std::pair<std::string, uint16_t>> stun_servers = {
+        {stun_url_, 3478},
     };
-    p2p_client client;
-    client.init(config);
-    client.connect("ws://localhost:8080");
+    uint32_t peer_conn_id = 1;
+    int thread_count = 4;
 
-    uint16_t socks_port = 10800;
-    
-    try
+    asio::io_context io;
+    // 防止 io.run() 因为暂时没有任务而直接退出
+    auto work_guard = asio::make_work_guard(io);
+
+    std::vector<std::thread> io_threads;
+
+    for (int i = 0; i < thread_count; i++)
     {
-        asio::io_context io;
-        auto work_guard = asio::make_work_guard(io);
-
-        uint32_t peer_conn_id = 1; // 占位，换成你的真实值
-        SessionMux mux(peer_conn_id);
-
-        client.bindDataChannel([&mux](rtc::binary data)
-                                 {
-                        auto result = p2psocks::unpackMessage(data.data(), data.size());
-                        if (!result)
-                        {
-                            return;
-                        }
-
-                    mux.on_p2p_data(1, result->payload, result->len);
-                });
-        mux.set_send_func([&client](uint32_t conn_id, const uint8_t *data, size_t len)
-                           {
-            std::vector<std::byte> buf;
+        io_threads.emplace_back([&io]()
+                                {
             try
             {
-                buf = p2psocks::packMessage(data, len);
+                io.run();
             }
-            catch (const std::length_error &e)
+            catch (const std::exception &e)
             {
-                PLOG_ERROR << "sendData: " << e.what();
-                return;
-            }
-            client.send(buf.data(), buf.size());
-             });
-        
-        SocksServer server(io, socks_port, mux);
-        
-        std::vector<std::thread> io_threads;
-
-        int thread_count = 4; // 根据CPU核数或负载调整
-
-        for (int i = 0; i < thread_count; i++)
-        {
-            io_threads.emplace_back([&io]()
-                                    { io.run(); });
-        }
-
-        for (auto &t : io_threads)
-        {
-            if (t.joinable())
-                t.join();
-        }
-
-        io.stop();
-
+                PLOG_ERROR << "io thread exception: " << e.what();
+            } });
     }
-    catch (std::exception &e)
+
+    NetworkRtcApp::Config config;
+
+    config.signalingUrl = signaling_url_;
+    config.stunServers = stun_servers;
+    config.password = password_;
+    config.socks5_server_port = socks5_server_port;
+
+    NetworkRtcApp app(peer_conn_id,io);
+
+    app.onClose([&]()
+                {
+                    if(running==true)
+                    {
+                        PLOG_INFO << "p2p socks5 closed, please input q to exit.";
+                        running = false;
+                    }
+                    else
+                    {
+                        PLOG_INFO << "p2p socks5 closed, exit.";
+                    }
+         });
+
+    app.start(config);
+
+    input_keyboard();
+
+    PLOG_INFO << "closing ...";
+
+    // 先关闭业务
+    // 如果你的 NetworkRtcApp 有 stop() / close()，这里调用
+    app.stop();
+
+    // 允许 io.run() 退出
+    work_guard.reset();
+
+    for (auto &t : io_threads)
     {
-        std::cerr << "异常: " << e.what() << "\n";
+        if (t.joinable())
+            t.join();
     }
 
-    client.disconnect();
     RtcLogger::instance().shutdown();
 
     return 0;

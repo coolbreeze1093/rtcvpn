@@ -5,10 +5,9 @@
 #include <memory>
 #include "session_mux.h"
 #include "udp_session.h"
+#include "http_parse.h"
 
 using asio::ip::tcp;
-using namespace p2psocks;
-
 
 class Socks5Session : public std::enable_shared_from_this<Socks5Session>
 {
@@ -28,9 +27,15 @@ private:
 
     void do_read_http_request_line();
 
+    void do_read_http_request_body();
+
+    void on_http_request_complete();
+
+    void request_remote_connect_for_http();
+
     // 读掉剩余 header，直到空行 "\r\n"
     template <typename Handler>
-    void consume_http_headers(Handler handler)
+    void consume_https_headers(Handler handler)
     {
         auto self(shared_from_this());
         asio::async_read_until(
@@ -39,7 +44,7 @@ private:
             {
                 if (ec)
                 {
-                    print_error("read http headers error");
+                    print_error("read https headers error");
                     self->close();
                     return;
                 }
@@ -49,9 +54,9 @@ private:
             });
     }
 
-    void do_connect_upstream_and_tunnel_for_http(bool ok);
+    void do_connect_upstream_and_tunnel_for_https(bool ok);
 
-    void request_remote_connect_for_http();
+    void request_remote_connect_for_https();
 
     void do_read_request();
 
@@ -94,8 +99,8 @@ private:
 
     std::string target_host_;
     uint16_t target_port_ = 0;
-    std::shared_ptr<Session> session_;
-    std::shared_ptr<UdpSession> udp_session_;
+    std::shared_ptr<Session> session_ = nullptr;
+    std::shared_ptr<UdpSession> udp_session_ = nullptr;
 
     asio::io_context &io_;
 
@@ -104,4 +109,13 @@ private:
     uint32_t session_id_ = 0;
     std::mutex mutex_;
     bool is_closed_{false};
+
+    // 读取到的http请求体
+    asio::streambuf read_buf_;
+    
+    // 待处理的http请求
+    p2psocks::HttpParser::Limits http_parser_limits_;
+    std::string pending_http_request_;
+    p2psocks::HttpParser http_response_parser_;
+    p2psocks::HttpParser http_request_parser_;
 };

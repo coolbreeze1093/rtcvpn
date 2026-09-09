@@ -5,8 +5,8 @@
 using asio::ip::tcp;
 using SessionMux = p2psocks::SessionMux;
 
-SocksServer::SocksServer(asio::io_context &io, uint16_t port, SessionMux &mux)
-    : acceptor_(io, tcp::endpoint(tcp::v4(), port)), mux_(mux), io_(io), port_(port)
+SocksServer::SocksServer(asio::io_context &io, SessionMux &mux)
+    : acceptor_(io), mux_(mux), io_(io)
 {
     PLOG_INFO << "SocksServer constructor";
 }
@@ -16,16 +16,24 @@ SocksServer::~SocksServer()
     PLOG_INFO << "~SocksServer destructor";
 }
 
-void SocksServer::start()
+void SocksServer::start(int16_t port)
 {
-    PLOG_INFO << "[本地] SOCKS5 入口已启动，监听端口 " << port_ << "\n";
+    port_ = port;
+    PLOG_INFO << "SocksServer start, port: " << port_ << "\n";
+    acceptor_.open(tcp::v4());
+    acceptor_.set_option(asio::socket_base::reuse_address(true));
+    acceptor_.bind(tcp::endpoint(tcp::v4(), port_));
+    acceptor_.listen();
     do_accept();
 }
 
 void SocksServer::stop()
 {
-    PLOG_INFO << "[本地] SOCKS5 入口已停止";
-    acceptor_.close();
+    PLOG_INFO << "closing SOCKS5 server";
+    if(acceptor_.is_open())
+    {
+        acceptor_.close();
+    }
 }
 
 void SocksServer::do_accept()
@@ -34,7 +42,7 @@ void SocksServer::do_accept()
                            {
         if (ec&&ec == asio::error::operation_aborted)
         {
-            
+            PLOG_INFO << "accept operation aborted";
             return;
         }
         if(ec)

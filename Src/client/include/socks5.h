@@ -23,9 +23,11 @@ using SessionMux = p2psocks::SessionMux;
 class SocksServer
 {
 public:
-    SocksServer(asio::io_context &io, uint16_t port, SessionMux &mux);
+    SocksServer(asio::io_context &io, SessionMux &mux);
 
-    void start();
+    ~SocksServer();
+
+    void start(int16_t port);
 
     void stop();
 

@@ -3,6 +3,7 @@
 #include "session_mux.h"
 #include "tcp_session.h"
 #include "udp_session.h"
+#include "http_session.h"
 
 class Socks5Session : public std::enable_shared_from_this<Socks5Session>
 {
@@ -35,6 +36,7 @@ private:
 
     std::unordered_map<uint32_t, std::shared_ptr<TcpSession>> tcp_sessions_;
     std::unordered_map<uint32_t, std::shared_ptr<UdpClient>> udp_sessions_;
+    std::unordered_map<uint32_t, std::shared_ptr<HttpSession>> http_sessions_;
 
     std::function<void(uint32_t)> close_cb_;
 };

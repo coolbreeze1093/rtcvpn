@@ -23,8 +23,8 @@ void ws_server::connect(std::shared_ptr<rtc::WebSocket> ws)
 
 void ws_server::disconnect()
 {
-    if(ws_->isOpen())
-    ws_->close();
+    if (ws_->isOpen())
+        ws_->close();
 }
 
 void ws_server::send(const std::string &str)
@@ -37,12 +37,12 @@ void ws_server::bindLoginSuccess(std::function<void(uint32_t)> callback)
     loginSuccessFunc_ = callback;
 }
 
-void ws_server::bindsetRemoteDescriptionFunc(std::function<void(const std::string&, const std::string&)> callback)
+void ws_server::bindsetRemoteDescriptionFunc(std::function<void(const std::string &, const std::string &)> callback)
 {
     setRemoteDescriptionFunc_ = callback;
 }
 
-void ws_server::bindaddRemoteCandidateFunc(std::function<void(const std::string&, const std::string&)> callback)
+void ws_server::bindaddRemoteCandidateFunc(std::function<void(const std::string &, const std::string &)> callback)
 {
     addRemoteCandidateFunc_ = callback;
 }
@@ -88,6 +88,14 @@ void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
                                 j["type"] = "verify";
                                 j["result"] = "success";
                                 self->loginSuccessFunc_(self->id_card_);
+                                self->ws_->send(j.dump());
+                            }
+                            else
+                            {
+                                PLOG_ERROR << "Password is incorrect";
+                                json j;
+                                j["type"] = "verify";
+                                j["result"] = "failed";
                                 self->ws_->send(j.dump());
                             }
                         }
@@ -142,9 +150,8 @@ void ws_server::bindWebSocket(std::shared_ptr<rtc::WebSocket> ws)
                     PLOG_DEBUG << "WebSocket closed"; });
 
     ws->onError([](std::string message)
-                {
-                    PLOG_ERROR << "WebSocket error: "
-                            << message; });
+                { PLOG_ERROR << "WebSocket error: "
+                             << message; });
 }
 
 void ws_server::bindCloseFunc(std::function<void(uint32_t)> cb)
@@ -171,27 +178,58 @@ void p2p_server::init(rtc::Configuration config)
 
 void p2p_server::send(rtc::message_variant message)
 {
-    if(dc_&&dc_->isOpen())
+    try
     {
-        dc_->send(message);
+        if (message == rtc::message_variant())
+        {
+            PLOG_WARNING << "send empty message";
+            return;
+        }
+        
+        if (dc_ && dc_->isOpen())
+        {
+            dc_->send(message);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        PLOG_ERROR << "send exception: " << e.what();
     }
 }
 
 void p2p_server::send(std::byte *data, size_t size)
 {
-    if(dc_&&dc_->isOpen())
+    try
     {
-        dc_->send(data, size);
+        if (size == 0)
+        {
+            PLOG_WARNING << "send empty data";
+            return;
+        }
+        if (size > 0 && data == nullptr)
+        {
+            PLOG_ERROR << "send nullptr data";
+            return;
+        }
+
+        if (dc_ && dc_->isOpen())
+        {
+            dc_->send(data, size);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        PLOG_ERROR << "send exception: " << e.what();
     }
 }
 
 void p2p_server::close()
 {
-    if(dc_&&dc_->isOpen())
+    if (dc_ && dc_->isOpen())
     {
         dc_->close();
     }
-    if(pc_&&pc_->state() == rtc::PeerConnection::State::Connected)
+    if (pc_ && pc_->state() == rtc::PeerConnection::State::Connected)
     {
         pc_->close();
     }
@@ -212,12 +250,12 @@ void p2p_server::bindDataChannel(std::function<void(rtc::binary)> callback)
     data_channel_binary_callback_ = callback;
 }
 
-void p2p_server::setRemoteDescription(const std::string& sdp, const std::string& type)
+void p2p_server::setRemoteDescription(const std::string &sdp, const std::string &type)
 {
     pc_->setRemoteDescription(rtc::Description(sdp, type));
 }
 
-void p2p_server::addRemoteCandidate(const std::string& candidate, const std::string& mid)
+void p2p_server::addRemoteCandidate(const std::string &candidate, const std::string &mid)
 {
     pc_->addRemoteCandidate(rtc::Candidate(candidate, mid));
 }
@@ -225,8 +263,8 @@ void p2p_server::addRemoteCandidate(const std::string& candidate, const std::str
 void p2p_server::createDataChannel(std::shared_ptr<rtc::DataChannel> dc)
 {
     dc_ = dc;
-    dc_->onOpen([]()
-                { PLOG_DEBUG << "DataChannel opened"; });
+    dc_->onOpen([this]()
+                { PLOG_DEBUG << "DataChannel opened" << "max message size: " << dc_->maxMessageSize(); });
 
     dc_->onClosed([]()
                   { PLOG_DEBUG << "DataChannel closed"; });
@@ -244,9 +282,9 @@ void p2p_server::createDataChannel(std::shared_ptr<rtc::DataChannel> dc)
         else
         {
             PLOG_DEBUG << "DataChannel binary message: " << message.size() << " bytes";
-        } }, 
-        
-        [](std::string message)
+        } },
+
+                   [](std::string message)
                    { PLOG_DEBUG << "DataChannel message: " << message; });
 }
 
@@ -269,7 +307,7 @@ void p2p_server::createPeerConnection()
 
     pc_->onGatheringStateChange([](rtc::PeerConnection::GatheringState state)
                                 { PLOG_DEBUG << "Gathering state: "
-                                            << static_cast<int>(state); });
+                                             << static_cast<int>(state); });
 
     pc_->onLocalCandidate([self](rtc::Candidate candidate)
                           { 

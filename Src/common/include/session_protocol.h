@@ -29,6 +29,10 @@ namespace p2psocks
         UDP_SYNACK = 0x06, // UDP 连接结果, payload = 1字节状态(0=成功,1=失败)
         UDP_FIN = 0x07,    // UDP 关闭该会话, payload 为空
         UDP_DATA = 0x08,   // UDP 数据, payload = 原始字节
+        HTTP_SYN = 0x09,  // HTTP 连接请求, payload = host_len(1)+host+port(2)
+        HTTP_SYNACK = 0x0A, // HTTP 连接结果, payload = 1字节状态(0=成功,1=失败)
+        HTTP_FIN = 0x0B,   // HTTP 关闭该会话, payload 为空
+        HTTP_DATA = 0x0C,  // HTTP 数据, payload = 原始字节
     };
 
     struct SendData

@@ -33,6 +33,10 @@ namespace p2psocks
             std::shared_ptr<std::vector<uint8_t>> data)>;
         using UdpSynackCallback = std::function<void(bool ok)>;
 
+        using HttpSynackCallback = std::function<void(bool ok)>;
+        using HttpCloseCallback = std::function<void()>;
+        using HttpDataCallback = std::function<void(const uint8_t *, size_t)>;
+
         explicit Session(uint32_t stream_id);
 
         uint32_t stream_id() const;
@@ -43,13 +47,19 @@ namespace p2psocks
         void set_on_udp_data(UdpCallback cb);
         void set_on_udp_synack(UdpSynackCallback cb);
         void set_on_udp_close(CloseCallback cb);
-
+        void set_on_http_synack(HttpSynackCallback cb){on_http_synack_ = cb;}
+        void set_on_http_close(HttpCloseCallback cb){on_http_close_ = cb;}
+        void set_on_http_data(HttpDataCallback cb){on_http_data_ = cb;}
+        
         DataCallback on_data_;
         SynAckCallback on_synack_;
         CloseCallback on_close_;
         UdpCallback on_udp_data_;
         UdpSynackCallback on_udp_synack_;
         CloseCallback on_udp_close_;
+        HttpSynackCallback on_http_synack_;
+        HttpCloseCallback on_http_close_;
+        HttpDataCallback on_http_data_;
 
     private:
         uint32_t stream_id_;
@@ -68,6 +78,7 @@ namespace p2psocks
                                               uint16_t port)>;
 
         using UdpSynHandler = std::function<void(uint32_t session_id)>;
+        using HttpSynHandler = std::function<void(uint32_t session_id,const std::string &host, uint16_t port)>;
 
         // peer_conn_id: 你的 P2P 模块里代表"对端"的连接标识，由你在建立好P2P连接后传入
         SessionMux(uint32_t peer_conn_id);
@@ -75,6 +86,7 @@ namespace p2psocks
         void set_send_func(SendFunc f);
         void set_on_syn(SynHandler h);
         void set_on_udp_syn(UdpSynHandler h);
+        void set_on_http_syn(HttpSynHandler h){on_http_syn_ = h;}
 
         // ---------- 这个函数由你接到P2P模块的"收到数据"回调里调用 ----------
         // 例如: p2pModule.setOnReceive([&](uint32_t conn_id, const uint8_t* d, size_t n){
@@ -108,6 +120,10 @@ namespace p2psocks
 
         void send_udp(uint32_t stream_id, const std::string&host, uint16_t port,
             const std::vector<uint8_t>& data);
+        void send_http_syn(uint32_t stream_id, const std::string &host, uint16_t port);
+        void send_http_fin(uint32_t stream_id);
+        void send_http_synack(uint32_t stream_id, bool ok);
+        void send_http_data(uint32_t stream_id, const uint8_t *data, size_t len);
 
     private:
         uint32_t gen_stream_id();
@@ -116,6 +132,8 @@ namespace p2psocks
         uint32_t peer_conn_id_;
         SynHandler on_syn_;
         UdpSynHandler on_udp_syn_;
+        HttpSynHandler on_http_syn_;
+
         std::map<uint32_t, std::shared_ptr<Session>> sessions_;
     };
 

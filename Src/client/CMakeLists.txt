@@ -6,11 +6,13 @@ add_executable(client
     src/main.cpp
     src/tcp_session.cpp
     src/udp_session.cpp
-    src/p2p_client.cpp
     src/socks5.cpp
+    src/network_rtc_app.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_protocol.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_mux.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_id_generator.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/p2p_client.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/signaling.cpp
 )
 
 target_include_directories(client

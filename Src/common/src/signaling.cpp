@@ -1,4 +1,4 @@
-#include "signaling_client.h"
+#include "signaling.h"
 #include <plog/Log.h>
 
 void SignalingClient::connect(const std::string &url)

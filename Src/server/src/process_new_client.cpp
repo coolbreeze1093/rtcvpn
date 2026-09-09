@@ -117,7 +117,7 @@ void Socks5Session::onLoginSuccess()
                                 }
                                 self->ws_->disconnect();
                             }
-                            
+
                             // 通知 ws 关闭
                         });
 
@@ -151,12 +151,14 @@ void Socks5Session::onLoginSuccess()
                         {
         try
         {
+            //PLOG_DEBUG << "send data, conn_id=" << conn_id << ", size=" << len;
             std::vector<std::byte> buf = p2psocks::packMessage(data, len);
+            //PLOG_DEBUG << "send data, conn_id=" << conn_id << ", size=" << len;
             if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
+            {
+                PLOG_ERROR << "weak_this is expired";
+                return;
+            }
             auto self = weak_this.lock();
             if(self)
             {
@@ -235,6 +237,38 @@ void Socks5Session::onLoginSuccess()
             }
         });
         udp->start(); });
+
+    mux_->set_on_http_syn([weak_this](uint32_t stream_id, const std::string &host, uint16_t port)
+                          {
+                              if (weak_this.expired())
+                              {
+                                  PLOG_ERROR << "weak_this is expired";
+                                  return;
+                              }
+                              auto self = weak_this.lock();
+                              if (!self)
+                              {
+                                  PLOG_ERROR << "weak_this is expired";
+                                  return;
+                              }
+                              PLOG_DEBUG << "rev http syn (stream_id=" << stream_id
+                                         << ", session=" << self->session_id_ << ")\n";
+                              auto http = std::make_shared<HttpSession>(self->io_, self->mux_, stream_id);
+                              self->http_sessions_[stream_id] = http;
+                              http->bind_close_func([weak_this](uint32_t stream_id)
+                                                    {
+                                if(weak_this.expired())
+                                {
+                                    PLOG_ERROR << "weak_this is expired";
+                                    return;
+                                } 
+                                if(auto self = weak_this.lock())
+                                {
+                                    self->http_sessions_.erase(stream_id);
+                                }
+                            });
+                              http->connect_target(host, port);
+                          });
 }
 
 void Socks5Session::notifyClose()

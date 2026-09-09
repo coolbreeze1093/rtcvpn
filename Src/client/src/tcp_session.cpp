@@ -9,7 +9,7 @@ using asio::ip::tcp;
 using namespace p2psocks;
 
 Socks5Session::Socks5Session(asio::io_context &io, tcp::socket socket, SessionMux &mux, uint32_t session_id)
-    : socket_(std::move(socket)), mux_(mux), io_(io), session_id_(session_id)
+    : socket_(std::move(socket)), mux_(mux), io_(io), session_id_(session_id), http_response_parser_(http_parser_limits_), http_request_parser_(http_parser_limits_)
 {
     PLOG_DEBUG << "Socks5Session created, session_id: " << session_id_;
 }
@@ -79,7 +79,7 @@ void Socks5Session::do_read_greeting()
             }
             else
             {
-                PLOG_DEBUG << "HTTP greeting received, session_id: " << session_id_;
+                PLOG_DEBUG << "HTTPs greeting received, session_id: " << session_id_;
                 std::ostream os(&request_buf_);
                 os << buf_[0] << buf_[1];
                 do_read_http_request_line();
@@ -96,7 +96,7 @@ void Socks5Session::do_read_http_request_line()
         {
             if (ec)
             {
-                print_error("read http request line error");
+                print_error("read https request line error");
                 self->close();
                 return;
             }
@@ -116,7 +116,7 @@ void Socks5Session::do_read_http_request_line()
                 auto pos = uri.find(':');
                 if (pos == std::string::npos)
                 {
-                    PLOG_ERROR << "invalid CONNECT target: " << uri << " stream_id:"<<self->session_->stream_id();
+                    PLOG_ERROR << "invalid CONNECT target: " << uri << " stream_id:" << self->session_->stream_id();
                     self->close();
                     return;
                 }
@@ -126,18 +126,201 @@ void Socks5Session::do_read_http_request_line()
                 target_host_ = http_host;
                 target_port_ = std::stoi(http_port);
 
-                consume_http_headers([this, self]()
-                                     { request_remote_connect_for_http(); });
+                consume_https_headers([this, self]()
+                                      { request_remote_connect_for_https(); });
             }
             else
             {
-                print_error("plain http method not implemented: " + method);
-                self->close();
+                // 把已经读出的请求行，重新交给 HttpParser（因为它需要完整的
+                // start-line 文本，而不是拆分好的 method/uri/version）
+
+                std::string first_line = line + "\r\n";
+                http_request_parser_.feed(first_line.data(), first_line.size());
+
+                // 把 request_buf_ 里 async_read_until 已经多读进来、
+                // 但还没被 getline 消费掉的剩余字节，也喂进去
+                if (request_buf_.size() > 0)
+                {
+                    std::istream rest_is(&request_buf_);
+                    std::string rest(
+                        (std::istreambuf_iterator<char>(rest_is)),
+                        std::istreambuf_iterator<char>());
+
+                    if (!rest.empty())
+                    {
+                        http_request_parser_.feed(rest.data(), rest.size());
+                    }
+                }
+
+                if (http_request_parser_.error())
+                {
+                    print_error("http parse error: " + http_request_parser_.error_message());
+                    self->close();
+                    return;
+                }
+
+                if (http_request_parser_.complete())
+                {
+                    // 一次性就凑齐了完整请求（常见于无 body 的 GET 请求）
+                    on_http_request_complete();
+                }
+
+                // 还没收完，继续异步读取更多数据喂给 parser
+                do_read_http_request_body();
             }
         });
 }
 
-void Socks5Session::do_connect_upstream_and_tunnel_for_http(bool ok)
+void Socks5Session::do_read_http_request_body()
+{
+    auto self(shared_from_this());
+
+    socket_.async_read_some(
+        read_buf_.prepare(4096),
+        [this, self](std::error_code ec, std::size_t length)
+        {
+            if (ec)
+            {
+                print_error("read http request body error");
+                if (session_)
+                {
+                    mux_.send_http_fin(session_->stream_id());
+                }
+                self->close();
+                return;
+            }
+
+            read_buf_.commit(length);
+
+            auto bufs = read_buf_.data();
+            std::string chunk(
+                asio::buffers_begin(bufs),
+                asio::buffers_begin(bufs) + length);
+
+            read_buf_.consume(length);
+
+            http_request_parser_.feed(chunk.data(), chunk.size());
+
+            if (http_request_parser_.error())
+            {
+                print_error("http parse error: " + http_request_parser_.error_message());
+                if (session_)
+                {
+                    mux_.send_http_fin(session_->stream_id());
+                }
+                self->close();
+                return;
+            }
+
+            if (http_request_parser_.complete())
+            {
+                self->on_http_request_complete();
+            }
+
+            // 还没结束，继续读
+            self->do_read_http_request_body();
+        });
+}
+
+void Socks5Session::on_http_request_complete()
+{
+    auto msg = http_request_parser_.message();
+    std::string next_line = http_request_parser_.take_remaining();
+    http_request_parser_.reset();
+    http_request_parser_.feed(next_line.data(), next_line.size());
+
+    // 转发前的清理（hop-by-hop 头等），参考之前讨论的 prepare_for_forwarding
+    // prepare_for_forwarding(msg, "1.1 my-proxy", socket_.remote_endpoint().address().to_string());
+
+    pending_http_request_ = msg.serialize();
+    if (!session_)
+    {
+        target_host_ = std::string(msg.get_header("Host"));
+
+        // Host 头可能带端口，比如 "example.com:8080"
+        auto colon = target_host_.find(':');
+        if (colon != std::string::npos)
+        {
+            target_port_ = std::stoi(target_host_.substr(colon + 1));
+            target_host_ = target_host_.substr(0, colon);
+        }
+        else
+        {
+            target_port_ = 80;
+        }
+
+        if (target_host_.empty())
+        {
+            print_error("plain http request missing Host header");
+            close();
+            return;
+        }
+        request_remote_connect_for_http();
+    }
+    else
+    {
+        mux_.send_http_data(session_->stream_id(), reinterpret_cast<const uint8_t *>(pending_http_request_.data()), pending_http_request_.size());
+    }
+}
+
+void Socks5Session::request_remote_connect_for_http()
+{
+    session_ = mux_.create_session();
+    std::weak_ptr<Socks5Session> weak_self = shared_from_this();
+    session_->set_on_http_data([weak_self](const uint8_t *d, size_t n)
+                               {
+                              if (weak_self.expired())
+                              {
+                                  PLOG_WARNING << "Socks5Session expired";
+                                  return;
+                              }
+                              auto self = weak_self.lock();
+                              self->http_response_parser_.feed(reinterpret_cast<const char *>(d), n);
+                              if (self->http_response_parser_.complete())
+                              {
+                                  auto &msg = self->http_response_parser_.message();
+                                  prepare_for_forwarding(msg, "1.1 my-proxy", self->socket_.local_endpoint().address().to_string());
+                                  bool writing = !self->write_queue_.empty();
+                                  std::string s = msg.serialize();
+                                  std::vector<uint8_t> v(s.size());
+                                  std::memcpy(v.data(), s.data(), s.size());
+                                  self->write_queue_.emplace_back(v);
+                                  if (!writing)
+                                      self->do_write_to_client();
+
+                                  self->http_response_parser_.reset();
+                                  std::string next_line = self->http_response_parser_.take_remaining();
+                                  self->http_response_parser_.feed(next_line.data(), next_line.size());
+                              } });
+    session_->set_on_http_synack([weak_self](bool ok)
+                                 {
+                                if (weak_self.expired())
+                                {
+                                    PLOG_WARNING << "Socks5Session expired";
+                                    return;
+                                }
+                                auto self = weak_self.lock();
+                                self->mux_.send_http_data(self->session_->stream_id(),
+                                                     reinterpret_cast<const uint8_t *>(self->pending_http_request_.data()),
+                                                     self->pending_http_request_.size()); });
+    session_->set_on_http_close([weak_self]()
+                                {
+                                if (weak_self.expired())
+                                {
+                                    PLOG_WARNING << "Socks5Session expired";
+                                    return;
+                                }
+                                auto self = weak_self.lock();
+                                std::error_code ec;
+                                self->socket_.close(ec); });
+
+    PLOG_INFO << "new http connect request " << target_host_ << ":"
+              << target_port_ << " (stream_id=" << session_->stream_id()
+              << ")\n";
+    mux_.send_http_syn(session_->stream_id(), target_host_, target_port_);
+}
+
+void Socks5Session::do_connect_upstream_and_tunnel_for_https(bool ok)
 {
     auto self(shared_from_this());
 
@@ -157,7 +340,7 @@ void Socks5Session::do_connect_upstream_and_tunnel_for_http(bool ok)
         });
 }
 
-void Socks5Session::request_remote_connect_for_http()
+void Socks5Session::request_remote_connect_for_https()
 {
     session_ = mux_.create_session();
     std::weak_ptr<Socks5Session> weak_self = shared_from_this();
@@ -180,7 +363,7 @@ void Socks5Session::request_remote_connect_for_http()
                                     return;
                                 }
                                 auto self = weak_self.lock();
-                                self->do_connect_upstream_and_tunnel_for_http(ok); });
+                                self->do_connect_upstream_and_tunnel_for_https(ok); });
     session_->set_on_close([weak_self]()
                            {
                                 if (weak_self.expired())
@@ -192,7 +375,7 @@ void Socks5Session::request_remote_connect_for_http()
                                 std::error_code ec;
                                 self->socket_.close(ec); });
 
-    PLOG_INFO << "new http connect request " << target_host_ << ":"
+    PLOG_INFO << "new https connect request " << target_host_ << ":"
               << target_port_ << " (stream_id=" << session_->stream_id()
               << ")\n";
     mux_.send_syn(session_->stream_id(), target_host_, target_port_);
@@ -360,7 +543,7 @@ void Socks5Session::request_remote_connect()
     session_ = mux_.create_session();
     std::weak_ptr<Socks5Session> weak_self = shared_from_this();
     session_->set_on_data([weak_self](const uint8_t *d, size_t n)
-                                {
+                          {
                                     if (weak_self.expired())
                                     {
                                         PLOG_WARNING << "Socks5Session expired";
@@ -369,8 +552,7 @@ void Socks5Session::request_remote_connect()
                                     auto self = weak_self.lock();
                                     bool writing = !self->write_queue_.empty();
                                     self->write_queue_.emplace_back(d, d + n);
-                                    if (!writing) self->do_write_to_client(); 
-                                });
+                                    if (!writing) self->do_write_to_client(); });
     session_->set_on_synack([weak_self](bool ok)
                             {
                                 if (weak_self.expired())
@@ -383,8 +565,7 @@ void Socks5Session::request_remote_connect()
                                 if (!ok)
                                 {
                                     self->close();
-                                }
-                            });
+                                } });
     session_->set_on_close([weak_self]()
                            {
                                 if (weak_self.expired())
@@ -393,12 +574,11 @@ void Socks5Session::request_remote_connect()
                                     return;
                                 }
                                 auto self = weak_self.lock();
-                                self->close();
-                            });
+                                self->close(); });
 
     PLOG_DEBUG << "new socks connect request " << target_host_ << ":"
-              << target_port_ << " (stream_id=" << session_->stream_id()
-              << ")\n";
+               << target_port_ << " (stream_id=" << session_->stream_id()
+               << ")\n";
     mux_.send_syn(session_->stream_id(), target_host_, target_port_);
 }
 
@@ -469,7 +649,7 @@ void Socks5Session::do_read_from_client()
         {
             if (ec)
             {
-                PLOG_ERROR << "read do_read_from_client error " << ec.message() <<"session_id=" << self->session_id_;
+                PLOG_ERROR << "read do_read_from_client error " << ec.message() << "session_id=" << self->session_id_;
                 self->mux_.send_fin(self->session_->stream_id());
                 self->close();
                 return;
@@ -488,7 +668,7 @@ void Socks5Session::do_read_from_client_for_udp()
         {
             if (ec)
             {
-                PLOG_ERROR << "read do_read_from_client_for_udp error " << ec.message() <<"session_id=" << self->session_id_;
+                PLOG_ERROR << "read do_read_from_client_for_udp error " << ec.message() << "session_id=" << self->session_id_;
                 self->mux_.send_udp_fin(self->session_->stream_id());
                 self->close();
                 return;
@@ -518,7 +698,7 @@ void Socks5Session::do_write_to_client()
 
 void Socks5Session::print_error(const std::string &msg)
 {
-    PLOG_ERROR <<"session " << session_id_ << " " << "stream_id=" << (session_.get() ? session_->stream_id() : 0) << " " << "host=" << target_host_ << " " << "port=" << target_port_ << " " << msg;
+    PLOG_ERROR << "session " << session_id_ << " " << "stream_id=" << (session_.get() ? session_->stream_id() : 0) << " " << "host=" << target_host_ << " " << "port=" << target_port_ << " " << msg;
 }
 
 void Socks5Session::close()
@@ -540,8 +720,7 @@ void Socks5Session::close()
         PLOG_ERROR << "socket close error: " << ec.message()
                    << ", value=" << ec.value();
     }
-    
-    if(on_close_)
+
+    if (on_close_)
         on_close_(session_id_);
-    
 }
