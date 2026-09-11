@@ -106,10 +106,10 @@ namespace p2psocks
         {
             std::lock_guard<std::mutex> lock(sessions_mutex_);
             sessions_[stream_id] = std::make_shared<Session>(stream_id);
+            return sessions_[stream_id];
         }
         std::shared_ptr<Session> create_session()
         {
-            std::lock_guard<std::mutex> lock(sessions_mutex_);
             return create_session(gen_stream_id());
         }
         void remove_session(uint32_t stream_id)

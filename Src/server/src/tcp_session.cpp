@@ -71,13 +71,13 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                 return;
             }
 
-            for (const auto &entry : results)
-            {
-                tcp::endpoint endpoint = entry.endpoint();
-                PLOG_DEBUG << "resolve host success, target: "
-                           << endpoint.address().to_string() << ", port=" << endpoint.port()
-                           << ", stream_id=" << stream_id_;
-            }
+            //for (const auto &entry : results)
+            //{
+            //    tcp::endpoint endpoint = entry.endpoint();
+            //    PLOG_DEBUG << "resolve host success, target: "
+            //               << endpoint.address().to_string() << ", port=" << endpoint.port()
+            //               << ", stream_id=" << stream_id_;
+            //}
 
             asio::async_connect(
                 target_socket_, results,
