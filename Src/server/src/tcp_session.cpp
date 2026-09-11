@@ -7,10 +7,10 @@ using asio::ip::tcp;
 using namespace p2psocks;
 
 TcpSession::TcpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
-              uint32_t stream_id)
+                       uint32_t stream_id)
     : io_(io), weak_mux_(weak_mux), target_socket_(io), stream_id_(stream_id)
 {
-    if(weak_mux_.expired())
+    if (weak_mux_.expired())
     {
         PLOG_ERROR << "weak_mux is expired";
         return;
@@ -26,7 +26,7 @@ TcpSession::~TcpSession()
 {
     if (session_)
     {
-        if(weak_mux_.expired())
+        if (weak_mux_.expired())
         {
             PLOG_ERROR << "weak_mux is expired";
             return;
@@ -58,7 +58,7 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
             if (ec)
             {
                 PLOG_ERROR << "resolve host failed " << ec.message();
-                if(weak_mux_.expired())
+                if (weak_mux_.expired())
                 {
                     PLOG_ERROR << "weak_mux is expired";
                     return;
@@ -70,15 +70,25 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                 close_func();
                 return;
             }
+
+            for (const auto &entry : results)
+            {
+                tcp::endpoint endpoint = entry.endpoint();
+                PLOG_DEBUG << "resolve host success, target: "
+                           << endpoint.address().to_string() << ", port=" << endpoint.port()
+                           << ", stream_id=" << stream_id_;
+            }
+
             asio::async_connect(
                 target_socket_, results,
-                [this, self](std::error_code ec, const tcp::endpoint &)
+                [this, self](std::error_code ec, const tcp::endpoint &endpoint)
                 {
                     if (ec)
                     {
-                        PLOG_ERROR << "connect target failed, stream_id=" << stream_id_
-                                  << ", " << ec.message();
-                        if(weak_mux_.expired())
+                        PLOG_ERROR << "connect target failed, target: "
+                                   << endpoint.address().to_string() << ", stream_id=" << stream_id_
+                                   << ", " << ec.message();
+                        if (weak_mux_.expired())
                         {
                             PLOG_ERROR << "weak_mux is expired";
                             return;
@@ -91,8 +101,12 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
                         return;
                     }
                     PLOG_DEBUG << "connect target success, stream_id="
-                              << stream_id_ << ", host=" << host_ << ", port=" << port_;
-                    if(weak_mux_.expired())
+                               << stream_id_ << ", target: "
+                               << endpoint.address().to_string()
+                               << ", stream_id=" << stream_id_
+                               << ", " << ec.message()
+                               << ",host=" << host_ << ", port=" << port_;
+                    if (weak_mux_.expired())
                     {
                         PLOG_ERROR << "weak_mux is expired";
                         return;
@@ -109,7 +123,7 @@ void TcpSession::connect_target(const std::string &host, uint16_t port)
 
 void TcpSession::close()
 {
-    if(target_socket_.is_open())
+    if (target_socket_.is_open())
     {
         std::error_code ec;
         target_socket_.close(ec);
@@ -179,7 +193,7 @@ void TcpSession::do_read_from_target()
             {
                 PLOG_ERROR << "do_read_from_target error, stream_id=" << stream_id_;
                 close_func();
-                if(weak_mux_.expired())
+                if (weak_mux_.expired())
                 {
                     PLOG_ERROR << "weak_mux is expired";
                     return;
@@ -190,7 +204,7 @@ void TcpSession::do_read_from_target()
                 }
                 return;
             }
-            if(weak_mux_.expired())
+            if (weak_mux_.expired())
             {
                 PLOG_ERROR << "weak_mux is expired";
                 return;

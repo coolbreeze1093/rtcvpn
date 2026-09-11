@@ -31,6 +31,7 @@ target_link_libraries(server
     datachannel
     nlohmann_json::nlohmann_json
     plog::plog
+    llhttp::llhttp
     ${windows_libs}
 )
 

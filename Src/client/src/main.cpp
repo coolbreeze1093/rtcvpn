@@ -45,7 +45,7 @@ int main(int argc, char *argv[])
 
     std::string password_ = "test";
     std::string signaling_url_ = "ws://localhost:8080";
-    uint16_t socks5_server_port = 10800;
+    uint16_t socks5_server_port = 10801;
     std::string stun_url_ = "stun.miwifi.com:3478";
     std::vector<std::pair<std::string, uint16_t>> stun_servers = {
         {stun_url_, 3478},

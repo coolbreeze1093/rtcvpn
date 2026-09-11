@@ -8,8 +8,8 @@ using namespace p2psocks;
 HttpSession::HttpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
                          uint32_t stream_id)
     : io_(io), weak_mux_(weak_mux), target_socket_(io), stream_id_(stream_id),
-      http_parse_request_(http_parser_limits_),
-      http_parse_response_(http_parser_limits_)
+      http_parse_request_(HttpParser::Type::Request),
+      http_parse_response_(HttpParser::Type::Response)
 {
     if (weak_mux_.expired())
     {
@@ -21,6 +21,57 @@ HttpSession::HttpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mu
         session_ = weak_mux_.lock()->create_session(stream_id_);
     }
     PLOG_DEBUG << "HttpSession created, stream_id=" << stream_id_;
+
+    http_parse_request_.set_on_headers_complete([this](HttpParser::Message &msg)
+                                                {
+                                                      //prepare_for_forwarding(msg, "1.1 my-proxy", target_socket_.local_endpoint().address().to_string());
+                                                      std::string s = msg.serialize_headers_only();
+                                                      //PLOG_DEBUG << "http headers: " << s;
+                                                      std::vector<uint8_t> v(s.size());
+                                                      std::memcpy(v.data(), s.data(), s.size());
+                                                      write_to_target(v); });
+    http_parse_request_.set_on_body([this](const char *data, std::size_t len)
+                                    {
+                                  //PLOG_DEBUG << "http body: " << std::string(data, len);
+                                  if (http_parse_request_.message().chunked)
+    {
+        // 重新编码为 chunked 格式: <hex-length>\r\n<data>\r\n
+        std::ostringstream oss;
+        oss << std::hex << len << "\r\n";
+        std::string chunk_header = oss.str();
+
+        std::vector<uint8_t> v;
+        v.reserve(chunk_header.size() + len + 2);
+
+        // chunk size 行
+        v.insert(v.end(), chunk_header.begin(), chunk_header.end());
+        // chunk data
+        v.insert(v.end(), data, data + len);
+        // 结尾 CRLF
+        v.push_back('\r');
+        v.push_back('\n');
+
+        write_to_target(v);
+    }
+    else
+    {
+        std::vector<uint8_t> v(len);
+        std::memcpy(v.data(), data, len);
+        write_to_target(v);
+    } });
+
+    http_parse_request_.set_on_error([this](int errno_code, std::string_view reason)
+                                     {
+                                    PLOG_ERROR << "http parse error: " << errno_code << " reason: " << reason.data();
+                                    close(); });
+
+    http_parse_request_.set_on_message_complete([this]()
+                                                {
+                                                    if(http_parse_request_.message().chunked)
+                                                    {
+                                                        std::vector<uint8_t> v{'0', '\r', '\n', '\r', '\n'};
+                                                        write_to_target(v); 
+                                                    } });
 }
 
 HttpSession::~HttpSession()
@@ -71,13 +122,15 @@ void HttpSession::connect_target(const std::string &host, uint16_t port)
                 close_func();
                 return;
             }
+            
             asio::async_connect(
                 target_socket_, results,
-                [this, self](std::error_code ec, const tcp::endpoint &)
+                [this, self](std::error_code ec, const tcp::endpoint &endpoint)
                 {
                     if (ec)
                     {
-                        PLOG_ERROR << "connect target failed, stream_id=" << stream_id_
+                        PLOG_ERROR << "connect target failed, stream_id=" << stream_id_ 
+                        << ", host=" << host_ << ", port=" << port_<<",endpoint="<<endpoint.address().to_string()
                                    << ", " << ec.message();
                         if (weak_mux_.expired())
                         {
@@ -92,7 +145,8 @@ void HttpSession::connect_target(const std::string &host, uint16_t port)
                         return;
                     }
                     PLOG_DEBUG << "connect target success, stream_id="
-                               << stream_id_ << ", host=" << host_ << ", port=" << port_;
+                               << stream_id_ <<",host=" << host_ << ", address=" << endpoint.address().to_string()
+                               << ", port=" << endpoint.port();
                     if (weak_mux_.expired())
                     {
                         PLOG_ERROR << "weak_mux is expired";
@@ -141,21 +195,7 @@ void HttpSession::setup_session_callbacks()
                                   return;
                               }
 
-                              self->http_parse_request_.feed(reinterpret_cast<const char *>(d), n);
-                              if (self->http_parse_request_.complete())
-                              {
-                                  HttpParser::Message request = self->http_parse_request_.message();
-                                  std::string next_request = self->http_parse_request_.take_remaining();
-                                  self->http_parse_request_.reset();
-                                  self->http_parse_request_.feed(next_request.c_str(), next_request.size());
-                                  prepare_for_forwarding(request,"my_proxy",self->target_socket_.local_endpoint().address().to_string());
-                                  std::string serialized_request = request.serialize();
-                                  std::vector<uint8_t> serialized_request_vec = {serialized_request.begin(), serialized_request.end()};
-                                  bool writing = !self->to_target_queue_.empty();
-                                  self->to_target_queue_.emplace_back(serialized_request_vec);
-                                  if (!writing)
-                                      self->do_write_to_target();
-                              } });
+                              self->http_parse_request_.feed(reinterpret_cast<const char *>(d), n); });
     session_->set_on_http_close([weak_self]()
                                 {
         if(weak_self.expired())
@@ -165,6 +205,14 @@ void HttpSession::setup_session_callbacks()
         }
         auto self = weak_self.lock();
         self->close(); });
+}
+
+void HttpSession::write_to_target(const std::vector<uint8_t> &v)
+{
+    bool writing = !to_target_queue_.empty();
+    to_target_queue_.emplace_back(std::move(v));
+    if (!writing)
+        do_write_to_target();
 }
 
 void HttpSession::do_write_to_target()
@@ -195,16 +243,16 @@ void HttpSession::do_read_from_target()
         {
             if (ec)
             {
-                PLOG_ERROR << "do_read_from_target error, stream_id=" << stream_id_;
+                PLOG_ERROR << "do_read_from_target error " << ec.message() << ", value=" << ec.value() << ", stream_id=" << stream_id_;
                 close_func();
                 if (weak_mux_.expired())
                 {
                     PLOG_ERROR << "weak_mux is expired";
                     return;
                 }
-                else
+                else if (auto mux = weak_mux_.lock())
                 {
-                    weak_mux_.lock()->send_http_fin(stream_id_);
+                    mux->send_http_fin(stream_id_);
                 }
                 return;
             }

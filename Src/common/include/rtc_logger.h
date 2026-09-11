@@ -79,7 +79,8 @@ public:
     void init(const std::string& filepath) {
         auto exec_dir = getExecutableDir();
         std::string log_path = exec_dir.string() + "/" + filepath;
-        file_.open(log_path, std::ios::out | std::ios::app);
+        //file_.open(log_path, std::ios::out | std::ios::app);
+        file_.open(log_path);
         running_ = true;
         worker_ = std::thread(&RtcLogger::workerLoop, this);
     }

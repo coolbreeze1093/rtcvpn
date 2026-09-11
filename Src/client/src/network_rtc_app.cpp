@@ -32,8 +32,10 @@ NetworkRtcApp::NetworkRtcApp(uint32_t peerConnId, asio::io_context &io_context)
 
 void NetworkRtcApp::stop()
 {
+    PLOG_DEBUG << "NetworkRtcApp stoping";
     server_.stop();
     session_controller_.disconnect();
+    PLOG_DEBUG << "NetworkRtcApp stoped";
 }
 
 void NetworkRtcApp::start(const Config &config)

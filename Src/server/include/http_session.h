@@ -34,7 +34,9 @@ public:
 
 private:
     void setup_session_callbacks();
-
+    
+    void write_to_target(const std::vector<uint8_t> &v);
+    
     void do_write_to_target();
 
     void do_read_from_target();
@@ -54,7 +56,6 @@ private:
     std::string host_;
     uint16_t port_ = 0;
 
-    HttpParser::Limits http_parser_limits_;
     HttpParser http_parse_request_;
     std::string http_request_;
     std::string http_response_;

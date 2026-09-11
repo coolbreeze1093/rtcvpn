@@ -11,6 +11,18 @@ using asio::ip::tcp;
 
 class Socks5Session : public std::enable_shared_from_this<Socks5Session>
 {
+    enum class State
+    {
+        Greeting,
+        TcpConnecting,
+        TcpConnected,
+        UdpConnecting,
+        UdpConnected,
+        HttpConnecting,
+        HttpConnected,
+        HttpsConnecting,
+        HttpsConnected,
+    };
 public:
     Socks5Session(asio::io_context &io, tcp::socket socket, SessionMux &mux, uint32_t session_id);
 
@@ -20,39 +32,20 @@ public:
 
     void set_on_close(std::function<void(uint32_t)> on_close);
 
+    void close();
+
 private:
-    asio::streambuf request_buf_;
+    std::array<uint8_t, 8192> request_buf_;
 
     void do_read_greeting();
 
     void do_read_http_request_line();
 
-    void do_read_http_request_body();
-
-    void on_http_request_complete();
-
     void request_remote_connect_for_http();
 
-    // 读掉剩余 header，直到空行 "\r\n"
-    template <typename Handler>
-    void consume_https_headers(Handler handler)
-    {
-        auto self(shared_from_this());
-        asio::async_read_until(
-            socket_, request_buf_, "\r\n\r\n",
-            [this, self, handler](std::error_code ec, std::size_t)
-            {
-                if (ec)
-                {
-                    print_error("read https headers error");
-                    self->close();
-                    return;
-                }
-                // request_buf_ 中此时已包含全部头部，直接丢弃（consume）
-                request_buf_.consume(request_buf_.size());
-                handler();
-            });
-    }
+    void http_connected();
+
+    void do_read_from_client_for_http();
 
     void do_connect_upstream_and_tunnel_for_https(bool ok);
 
@@ -85,11 +78,13 @@ private:
     void do_read_from_client_for_udp();
 
     // -------- P2P隧道 -> 浏览器 --------
+
+    void write_to_client(const std::vector<uint8_t> &v);
     void do_write_to_client();
 
     void print_error(const std::string &msg);
 
-    void close();
+    void close_session();
 
     tcp::socket socket_;
     SessionMux &mux_;
@@ -114,8 +109,11 @@ private:
     asio::streambuf read_buf_;
     
     // 待处理的http请求
-    p2psocks::HttpParser::Limits http_parser_limits_;
     std::string pending_http_request_;
     p2psocks::HttpParser http_response_parser_;
     p2psocks::HttpParser http_request_parser_;
+
+    State state_ = State::Greeting;
+
+    bool request_line_done_ = false;
 };

@@ -29,7 +29,7 @@ namespace p2psocks
         FrameHeader h;
         if (!FrameHeader::decode(data, len, h))
         {
-            PLOG_WARNING << "invalid frame header stream_id "<<h.stream_id;
+            PLOG_WARNING << "invalid frame header stream_id " << h.stream_id;
             return;
         }
 
@@ -44,7 +44,7 @@ namespace p2psocks
             uint16_t port;
             if (!decode_syn_payload(payload, plen, host, port))
             {
-                PLOG_WARNING << "invalid syn payload stream_id "<<h.stream_id;
+                PLOG_WARNING << "invalid syn payload stream_id " << h.stream_id;
                 return;
             }
 
@@ -54,62 +54,69 @@ namespace p2psocks
             }
             else
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "session not found stream_id " << h.stream_id;
             }
             break;
         }
         case FrameType::SYNACK:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
-                return;
-            }
-            bool ok = plen >= 1 && payload[0] == 0;
-            if (it->second->on_synack_)
-            {
-                it->second->on_synack_(ok);
+                bool ok = plen >= 1 && payload[0] == 0;
+                if (s->on_synack_)
+                {
+                    s->on_synack_(ok);
+                }
+                else
+                {
+                    PLOG_WARNING << "session found stream_id " << h.stream_id << " on_synack_ not set";
+                }
             }
             else
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "session not found stream_id " << h.stream_id;
+                return;
             }
+
             break;
         }
         case FrameType::DATA:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
-                return;
-            }
-            if (it->second->on_data_)
-            {
-                it->second->on_data_(payload, plen);
+                if (s->on_data_)
+                {
+                    s->on_data_(payload, plen);
+                }
+                else
+                {
+                    PLOG_WARNING << "session found stream_id " << h.stream_id << " on_data_ not set";
+                    return;
+                }
             }
             else
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "session not found stream_id " << h.stream_id;
             }
             break;
         }
         case FrameType::FIN:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
-                return;
-            }
-            if (it->second->on_close_)
-            {
-                it->second->on_close_();
+                if (s->on_close_)
+                {
+                    s->on_close_();
+                }
+                else
+                {
+                    PLOG_WARNING << "session found stream_id " << h.stream_id << " on_close_ not set";
+                    return;
+                }
             }
             else
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "session not found stream_id " << h.stream_id;
             }
             break;
         }
@@ -121,71 +128,75 @@ namespace p2psocks
             }
             else
             {
-                PLOG_WARNING << "udp session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "udp session not found stream_id " << h.stream_id;
             }
             break;
         }
         case FrameType::UDP_SYNACK:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "udp session not found stream_id "<<h.stream_id;
-                return;
-            }
-            bool ok = plen >= 1 && payload[0] == 0;
-            if (it->second->on_udp_synack_)
-            {
-                it->second->on_udp_synack_(ok);
+                bool ok = plen >= 1 && payload[0] == 0;
+                if (s->on_udp_synack_)
+                {
+                    s->on_udp_synack_(ok);
+                }
+                else
+                {
+                    PLOG_WARNING << "udp session found stream_id " << h.stream_id << " on_udp_synack_ not set";
+                }
             }
             else
             {
-                PLOG_WARNING << "udp session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "udp session not found stream_id " << h.stream_id;
+                return;
             }
         }
         case FrameType::UDP_FIN:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "udp session not found stream_id "<<h.stream_id;
-                return;
-            }
-            if (it->second->on_udp_close_)
-            {
-                it->second->on_udp_close_();
+                if (s->on_udp_close_)
+                {
+                    s->on_udp_close_();
+                }
+                else
+                {
+                    PLOG_WARNING << "udp session found stream_id " << h.stream_id << " on_udp_close_ not set";
+                }
             }
             else
             {
-                PLOG_WARNING << "udp session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "udp session not found stream_id " << h.stream_id;
+                return;
             }
             break;
         }
         case FrameType::UDP_DATA:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "session not found stream_id "<<h.stream_id;
-                return;
-            }
-
-            std::string host;
-            uint16_t port;
-            std::shared_ptr<std::vector<uint8_t>> data = nullptr;
-            if (!decode_udp_payload(payload, plen, host, port, data))
-            {
-                PLOG_WARNING << "invalid udp payload stream_id "<<h.stream_id;
-                return;
-            }
-
-            if (it->second->on_udp_data_)
-            {
-                it->second->on_udp_data_(host, port, data);
+                if (s->on_udp_data_)
+                {
+                    std::string host;
+                    uint16_t port;
+                    std::shared_ptr<std::vector<uint8_t>> data = nullptr;
+                    if (!decode_udp_payload(payload, plen, host, port, data))
+                    {
+                        PLOG_WARNING << "invalid udp payload stream_id " << h.stream_id;
+                        return;
+                    }
+                    s->on_udp_data_(host, port, data);
+                }
+                else
+                {
+                    PLOG_WARNING << "udp session found stream_id " << h.stream_id << " on_udp_data_ not set";
+                }
             }
             else
             {
-                PLOG_WARNING << "udp session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "udp session not found stream_id " << h.stream_id;
+                return;
             }
             break;
         }
@@ -195,7 +206,7 @@ namespace p2psocks
             uint16_t port;
             if (!decode_syn_payload(payload, plen, host, port))
             {
-                PLOG_WARNING << "invalid http syn payload stream_id "<<h.stream_id;
+                PLOG_WARNING << "invalid http syn payload stream_id " << h.stream_id;
                 return;
             }
             if (on_http_syn_)
@@ -204,68 +215,74 @@ namespace p2psocks
             }
             else
             {
-                PLOG_WARNING << "http session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "http session not found stream_id " << h.stream_id;
             }
             break;
         }
         case FrameType::HTTP_SYNACK:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "http session not found stream_id "<<h.stream_id;
-                return;
-            }
-            bool ok = plen >= 1 && payload[0] == 0;
-            if (it->second->on_http_synack_)
-            {
-                it->second->on_http_synack_(ok);
+                bool ok = plen >= 1 && payload[0] == 0;
+                if (s->on_http_synack_)
+                {
+                    s->on_http_synack_(ok);
+                }
+                else
+                {
+                    PLOG_WARNING << "http session found stream_id " << h.stream_id << " on_http_synack_ not set";
+                }
             }
             else
             {
-                PLOG_WARNING << "http session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "http session not found stream_id " << h.stream_id;
+                return;
             }
             break;
         }
         case FrameType::HTTP_FIN:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if(auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "http session not found stream_id "<<h.stream_id;
-                return;
-            }
-            if (it->second->on_http_close_)
-            {
-                it->second->on_http_close_();
+                if (s->on_http_close_)
+                {
+                    s->on_http_close_();
+                }
+                else
+                {
+                    PLOG_WARNING << "http session found stream_id " << h.stream_id << " on_http_close_ not set";
+                }
             }
             else
             {
-                PLOG_WARNING << "http session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "http session not found stream_id " << h.stream_id;
+                return;
             }
             break;
         }
         case FrameType::HTTP_DATA:
         {
-            auto it = sessions_.find(h.stream_id);
-            if (it == sessions_.end())
+            if (auto s = session_manager_.find_session(h.stream_id))
             {
-                PLOG_WARNING << "http session not found stream_id "<<h.stream_id;
-                return;
-            }
-            if (it->second->on_http_data_)
-            {
-                it->second->on_http_data_(payload, plen);
+                if (s->on_http_data_)
+                {
+                    s->on_http_data_(payload, plen);
+                }
+                else
+                {
+                    PLOG_WARNING << "http session found stream_id " << h.stream_id << " on_http_data_ not set";
+                }
             }
             else
             {
-                PLOG_WARNING << "http session not found stream_id "<<h.stream_id;
+                PLOG_WARNING << "http session not found stream_id " << h.stream_id;
+                return;
             }
             break;
         }
         default:
         {
-            PLOG_WARNING << "invalid frame type stream_id "<<h.stream_id;
+            PLOG_WARNING << "invalid frame type stream_id " << h.stream_id;
             break;
         }
         }
@@ -273,32 +290,30 @@ namespace p2psocks
 
     std::shared_ptr<Session> SessionMux::create_session()
     {
-        uint32_t sid = gen_stream_id();
-        auto s = std::make_shared<Session>(sid);
-        sessions_[sid] = s;
-        return s;
+        return session_manager_.create_session();
     }
 
     std::shared_ptr<Session> SessionMux::create_session(uint32_t stream_id)
     {
-        auto s = std::make_shared<Session>(stream_id);
-        sessions_[stream_id] = s;
-        return s;
+        return session_manager_.create_session(stream_id);
     }
 
     void SessionMux::register_session(std::shared_ptr<Session> s)
     {
-        sessions_[s->stream_id()] = s;
+        session_manager_.register_session(s);
     }
 
-    void SessionMux::remove_session(uint32_t stream_id) { sessions_.erase(stream_id); }
+    void SessionMux::remove_session(uint32_t stream_id)
+    {
+        session_manager_.remove_session(stream_id);
+    }
 
     void SessionMux::send_syn(uint32_t stream_id, const std::string &host, uint16_t port)
     {
         auto payload = encode_syn_payload(host, port);
         auto frame = make_frame(stream_id, FrameType::SYN, payload.data(),
                                 payload.size());
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -312,7 +327,7 @@ namespace p2psocks
     {
         uint8_t status = ok ? 0 : 1;
         auto frame = make_frame(stream_id, FrameType::SYNACK, &status, 1);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -325,7 +340,7 @@ namespace p2psocks
     void SessionMux::send_data(uint32_t stream_id, const uint8_t *data, size_t len)
     {
         auto frame = make_frame(stream_id, FrameType::DATA, data, len);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -338,7 +353,7 @@ namespace p2psocks
     void SessionMux::send_fin(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::FIN);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -351,7 +366,7 @@ namespace p2psocks
     void SessionMux::send_udp_syn(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::UDP_SYN);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -365,7 +380,7 @@ namespace p2psocks
     {
         uint8_t status = ok ? 0 : 1;
         auto frame = make_frame(stream_id, FrameType::UDP_SYNACK, &status, 1);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -378,7 +393,7 @@ namespace p2psocks
     void SessionMux::send_udp_fin(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::UDP_FIN);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -388,12 +403,12 @@ namespace p2psocks
         }
     }
 
-    void SessionMux::send_udp(uint32_t stream_id, const std::string&host, uint16_t port,
-        const std::vector<uint8_t>& data)
+    void SessionMux::send_udp(uint32_t stream_id, const std::string &host, uint16_t port,
+                              const std::vector<uint8_t> &data)
     {
         auto payload = encode_udp_payload(host, port, data);
         auto frame = make_frame(stream_id, FrameType::UDP_DATA, payload.data(), payload.size());
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -407,7 +422,7 @@ namespace p2psocks
     {
         auto payload = encode_syn_payload(host, port);
         auto frame = make_frame(stream_id, FrameType::HTTP_SYN, payload.data(), payload.size());
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -420,7 +435,7 @@ namespace p2psocks
     void SessionMux::send_http_fin(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::HTTP_FIN);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -434,7 +449,7 @@ namespace p2psocks
     {
         uint8_t status = ok ? 0 : 1;
         auto frame = make_frame(stream_id, FrameType::HTTP_SYNACK, &status, 1);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -446,9 +461,9 @@ namespace p2psocks
 
     void SessionMux::send_http_data(uint32_t stream_id, const uint8_t *data, size_t len)
     {
-        //PLOG_DEBUG << "send http data, stream_id=" << stream_id << ", size=" << len;
+        // PLOG_DEBUG << "send http data, stream_id=" << stream_id << ", size=" << len;
         auto frame = make_frame(stream_id, FrameType::HTTP_DATA, data, len);
-        if(send_func_)
+        if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
         }
@@ -457,17 +472,4 @@ namespace p2psocks
             PLOG_WARNING << "send_http_data: send_func_ is not set";
         }
     }
-
-    uint32_t SessionMux::gen_stream_id()
-    {
-        static std::mt19937 rng{std::random_device{}()};
-        static std::uniform_int_distribution<uint32_t> dist(1, 0xFFFFFFFEu);
-        uint32_t id;
-        do
-        {
-            id = dist(rng);
-        } while (sessions_.count(id));
-        return id;
-    }
-
 } // namespace p2psocks

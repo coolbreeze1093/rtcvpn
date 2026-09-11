@@ -29,8 +29,8 @@ namespace p2psocks
         using DataCallback = std::function<void(const uint8_t *, size_t)>;
         using SynAckCallback = std::function<void(bool ok)>;
         using CloseCallback = std::function<void()>;
-        using UdpCallback = std::function<void(const std::string&remote_host, uint16_t remote_port,
-            std::shared_ptr<std::vector<uint8_t>> data)>;
+        using UdpCallback = std::function<void(const std::string &remote_host, uint16_t remote_port,
+                                               std::shared_ptr<std::vector<uint8_t>> data)>;
         using UdpSynackCallback = std::function<void(bool ok)>;
 
         using HttpSynackCallback = std::function<void(bool ok)>;
@@ -47,10 +47,10 @@ namespace p2psocks
         void set_on_udp_data(UdpCallback cb);
         void set_on_udp_synack(UdpSynackCallback cb);
         void set_on_udp_close(CloseCallback cb);
-        void set_on_http_synack(HttpSynackCallback cb){on_http_synack_ = cb;}
-        void set_on_http_close(HttpCloseCallback cb){on_http_close_ = cb;}
-        void set_on_http_data(HttpDataCallback cb){on_http_data_ = cb;}
-        
+        void set_on_http_synack(HttpSynackCallback cb) { on_http_synack_ = cb; }
+        void set_on_http_close(HttpCloseCallback cb) { on_http_close_ = cb; }
+        void set_on_http_data(HttpDataCallback cb) { on_http_data_ = cb; }
+
         DataCallback on_data_;
         SynAckCallback on_synack_;
         CloseCallback on_close_;
@@ -65,8 +65,68 @@ namespace p2psocks
         uint32_t stream_id_;
     };
 
+    class SessionManager
+    {
+    public:
+        std::map<uint32_t, std::shared_ptr<Session>> sessions_;
+        std::mutex sessions_mutex_;
+        uint32_t gen_stream_id()
+        {
+            static std::mt19937 rng{std::random_device{}()};
+            static std::uniform_int_distribution<uint32_t> dist(1, 0xFFFFFFFEu);
+
+            uint32_t id;
+            while (true)
+            {
+                std::size_t is_free = 0;
+                id = dist(rng);
+                {
+                    std::lock_guard<std::mutex> lock(sessions_mutex_);
+                    is_free = sessions_.count(id);
+                }
+
+                if (is_free == 0)
+                {
+                    break;
+                }
+            }
+            return id;
+        }
+        std::shared_ptr<Session> find_session(uint32_t stream_id)
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            auto it = sessions_.find(stream_id);
+            if (it == sessions_.end())
+            {
+                return nullptr;
+            }
+            return it->second;
+        }
+        std::shared_ptr<Session> create_session(uint32_t stream_id)
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            sessions_[stream_id] = std::make_shared<Session>(stream_id);
+        }
+        std::shared_ptr<Session> create_session()
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            return create_session(gen_stream_id());
+        }
+        void remove_session(uint32_t stream_id)
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            sessions_.erase(stream_id);
+        }
+        void register_session(std::shared_ptr<Session> s)
+        {
+            std::lock_guard<std::mutex> lock(sessions_mutex_);
+            sessions_[s->stream_id()] = s;
+        }
+    };
+
     class SessionMux
     {
+
     public:
         // SendFunc: 绑定你的 P2P 模块的发送函数，签名对应 send(conn_id, data, len)
         using SendFunc =
@@ -78,7 +138,7 @@ namespace p2psocks
                                               uint16_t port)>;
 
         using UdpSynHandler = std::function<void(uint32_t session_id)>;
-        using HttpSynHandler = std::function<void(uint32_t session_id,const std::string &host, uint16_t port)>;
+        using HttpSynHandler = std::function<void(uint32_t session_id, const std::string &host, uint16_t port)>;
 
         // peer_conn_id: 你的 P2P 模块里代表"对端"的连接标识，由你在建立好P2P连接后传入
         SessionMux(uint32_t peer_conn_id);
@@ -86,7 +146,7 @@ namespace p2psocks
         void set_send_func(SendFunc f);
         void set_on_syn(SynHandler h);
         void set_on_udp_syn(UdpSynHandler h);
-        void set_on_http_syn(HttpSynHandler h){on_http_syn_ = h;}
+        void set_on_http_syn(HttpSynHandler h) { on_http_syn_ = h; }
 
         // ---------- 这个函数由你接到P2P模块的"收到数据"回调里调用 ----------
         // 例如: p2pModule.setOnReceive([&](uint32_t conn_id, const uint8_t* d, size_t n){
@@ -118,23 +178,20 @@ namespace p2psocks
 
         void send_udp_fin(uint32_t stream_id);
 
-        void send_udp(uint32_t stream_id, const std::string&host, uint16_t port,
-            const std::vector<uint8_t>& data);
+        void send_udp(uint32_t stream_id, const std::string &host, uint16_t port,
+                      const std::vector<uint8_t> &data);
         void send_http_syn(uint32_t stream_id, const std::string &host, uint16_t port);
         void send_http_fin(uint32_t stream_id);
         void send_http_synack(uint32_t stream_id, bool ok);
         void send_http_data(uint32_t stream_id, const uint8_t *data, size_t len);
 
     private:
-        uint32_t gen_stream_id();
-
+        SessionManager session_manager_;
         SendFunc send_func_;
         uint32_t peer_conn_id_;
         SynHandler on_syn_;
         UdpSynHandler on_udp_syn_;
         HttpSynHandler on_http_syn_;
-
-        std::map<uint32_t, std::shared_ptr<Session>> sessions_;
     };
 
 } // namespace p2psocks

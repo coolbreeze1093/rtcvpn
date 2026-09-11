@@ -93,6 +93,16 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(libdatachannel)
 
+set(BUILD_STATIC_LIBS ON CACHE INTERNAL "")
+
+FetchContent_Declare(
+    llhttp
+    GIT_REPOSITORY https://github.com/nodejs/llhttp.git
+    GIT_TAG release/v9.2.1
+)
+FetchContent_MakeAvailable(llhttp)
+
+
 if(WIN32)
     add_compile_definitions(_WIN32_WINNT=0x0A00)
 endif()

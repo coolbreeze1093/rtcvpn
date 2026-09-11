@@ -34,6 +34,13 @@ void SocksServer::stop()
     {
         acceptor_.close();
     }
+
+
+    for(auto &s : sessions_)
+    {
+        s.second->close();
+    }
+    sessions_.clear();
 }
 
 void SocksServer::do_accept()
