@@ -149,9 +149,12 @@ void TcpSession::setup_session_callbacks()
         }
         auto self = weak_self.lock();
 
-        bool writing = !self->to_target_queue_.empty();
         self->to_target_queue_.emplace_back(d, d + n);
-        if (!writing) self->do_write_to_target(); });
+        if (!self->is_sending_) 
+        {
+            self->is_sending_ = true;
+            self->do_write_to_target(); }
+        });
     session_->set_on_close([weak_self]()
                            {
         if(weak_self.expired())
@@ -161,6 +164,29 @@ void TcpSession::setup_session_callbacks()
         }
         auto self = weak_self.lock();
         self->close(); });
+    session_->set_on_data_ctrl([weak_self](CtrlType ctrl)
+                                {
+        if(weak_self.expired())
+        {
+            PLOG_ERROR << "weak_self is expired";
+            return;
+        }
+        auto self = weak_self.lock();
+        if (!self)
+        {
+            PLOG_ERROR << "self is expired";
+            return;
+        }
+        switch (ctrl)
+        {
+        case CtrlType::receive:
+            self->start_receive();
+            break;
+        case CtrlType::pause:
+            self->pause_receive();
+            break;
+        }
+        });
 }
 
 void TcpSession::do_write_to_target()
@@ -178,7 +204,13 @@ void TcpSession::do_write_to_target()
             }
             to_target_queue_.pop_front();
             if (!to_target_queue_.empty())
+            {
                 do_write_to_target();
+            }
+            else
+            {
+                is_sending_ = false;
+            }
         });
 }
 
@@ -213,7 +245,10 @@ void TcpSession::do_read_from_target()
             {
                 weak_mux_.lock()->send_data(stream_id_, target_buf_.data(), n);
             }
-            do_read_from_target();
+            if(is_receiving_)
+            {
+                do_read_from_target();
+            }
         });
 }
 

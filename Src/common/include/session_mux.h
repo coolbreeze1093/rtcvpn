@@ -21,6 +21,11 @@ namespace p2psocks
 {
 
     class SessionMux;
+    enum class CtrlType
+    {
+        receive,
+        pause,
+    };
 
     // 一条逻辑会话（对应一条浏览器 SOCKS5 连接 <-> 一条到目标的TCP连接）
     class Session
@@ -36,6 +41,8 @@ namespace p2psocks
         using HttpSynackCallback = std::function<void(bool ok)>;
         using HttpCloseCallback = std::function<void()>;
         using HttpDataCallback = std::function<void(const uint8_t *, size_t)>;
+        
+        using DataCtrlCallback = std::function<void(CtrlType ctrl)>;
 
         explicit Session(uint32_t stream_id);
 
@@ -50,6 +57,7 @@ namespace p2psocks
         void set_on_http_synack(HttpSynackCallback cb) { on_http_synack_ = cb; }
         void set_on_http_close(HttpCloseCallback cb) { on_http_close_ = cb; }
         void set_on_http_data(HttpDataCallback cb) { on_http_data_ = cb; }
+        void set_on_data_ctrl(DataCtrlCallback cb) { on_data_ctrl_ = cb; }
 
         DataCallback on_data_;
         SynAckCallback on_synack_;
@@ -60,6 +68,7 @@ namespace p2psocks
         HttpSynackCallback on_http_synack_;
         HttpCloseCallback on_http_close_;
         HttpDataCallback on_http_data_;
+        DataCtrlCallback on_data_ctrl_;
 
     private:
         uint32_t stream_id_;
@@ -180,10 +189,16 @@ namespace p2psocks
 
         void send_udp(uint32_t stream_id, const std::string &host, uint16_t port,
                       const std::vector<uint8_t> &data);
+
         void send_http_syn(uint32_t stream_id, const std::string &host, uint16_t port);
+
         void send_http_fin(uint32_t stream_id);
+
         void send_http_synack(uint32_t stream_id, bool ok);
+
         void send_http_data(uint32_t stream_id, const uint8_t *data, size_t len);
+
+        void send_data_ctrl(uint32_t stream_id, CtrlType type);
 
     private:
         SessionManager session_manager_;

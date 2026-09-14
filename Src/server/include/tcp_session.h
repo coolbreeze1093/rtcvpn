@@ -40,6 +40,10 @@ private:
 
     void close_func();
 
+    void start_receive(){if(!is_receiving_){is_receiving_ = true;do_read_from_target();}}
+
+    void pause_receive(){is_receiving_ = false;};
+
     asio::io_context &io_;
     std::weak_ptr<SessionMux> weak_mux_;
     std::shared_ptr<Session> session_;
@@ -52,4 +56,8 @@ private:
     std::mutex mutex_;
     std::string host_;
     uint16_t port_ = 0;
+
+    bool is_receiving_ = true;
+
+    bool is_sending_ = false;
 };

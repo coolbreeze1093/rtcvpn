@@ -79,7 +79,7 @@ bool UdpClient::start()
     }
     PLOG_DEBUG << "UDP server listening on port " << socket_.local_endpoint().port() << ", stream_id: " << stream_id_;
 
-    start_receive();
+    do_read_from_target();
 
     // 客户端来的数据
     std::weak_ptr<UdpClient> weak_self = shared_from_this();
@@ -103,6 +103,30 @@ bool UdpClient::start()
                                  auto self = weak_self.lock();
                                  self->close();
                                  PLOG_DEBUG << "UdpClient close, stream_id: " << self->stream_id_; });
+    
+    session_->set_on_data_ctrl([weak_self](p2psocks::CtrlType ctrl)
+                                {
+        if(weak_self.expired())
+        {
+            PLOG_ERROR << "weak_self is expired";
+            return;
+        }
+        auto self = weak_self.lock();
+        if (!self)
+        {
+            PLOG_ERROR << "self is expired";
+            return;
+        }
+        switch (ctrl)
+        {
+        case p2psocks::CtrlType::receive:
+            self->start_receive();
+            break;
+        case p2psocks::CtrlType::pause:
+            self->pause_receive();
+            break;
+        }});
+
     if (weak_mux_.expired())
     {
         PLOG_ERROR << "weak_mux is expired";
@@ -205,7 +229,7 @@ void UdpClient::do_send_next()
         });
 }
 
-void UdpClient::start_receive()
+void UdpClient::do_read_from_target()
 {
     auto self = shared_from_this();
 
@@ -228,7 +252,10 @@ void UdpClient::start_receive()
                 {
                     self->weak_mux_.lock()->send_udp(self->stream_id_, host, port, reply);
                 }
-                self->start_receive();
+                if(self->is_receiving_)
+                {
+                    self->do_read_from_target();
+                }
             }
             else
             {

@@ -33,6 +33,7 @@ namespace p2psocks
         HTTP_SYNACK = 0x0A, // HTTP 连接结果, payload = 1字节状态(0=成功,1=失败)
         HTTP_FIN = 0x0B,   // HTTP 关闭该会话, payload 为空
         HTTP_DATA = 0x0C,  // HTTP 数据, payload = 原始字节
+        DATA_CTRL = 0x0D, // 数据控制, payload = 1字节类型(0=接收,1=暂停)
     };
 
     struct SendData

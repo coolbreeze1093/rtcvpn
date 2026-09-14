@@ -77,9 +77,11 @@ private:
     // 保持tcp不关闭，等待udp数据
     void do_read_from_client_for_udp();
 
+    void write_to_client(const uint8_t *data, size_t size);
+
     // -------- P2P隧道 -> 浏览器 --------
 
-    void write_to_client(const std::vector<uint8_t> &v);
+    void write_to_client(std::vector<uint8_t> v);
     void do_write_to_client();
 
     void print_error(const std::string &msg);
@@ -104,16 +106,15 @@ private:
     uint32_t session_id_ = 0;
     std::mutex mutex_;
     bool is_closed_{false};
-
-    // 读取到的http请求体
-    asio::streambuf read_buf_;
     
-    // 待处理的http请求
-    std::string pending_http_request_;
     p2psocks::HttpParser http_response_parser_;
     p2psocks::HttpParser http_request_parser_;
 
     State state_ = State::Greeting;
 
     bool request_line_done_ = false;
+
+    p2psocks::CtrlType ctrl_type_ = p2psocks::CtrlType::receive;
+
+    bool is_writing_{false};
 };

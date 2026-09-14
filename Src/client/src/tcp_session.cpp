@@ -61,36 +61,28 @@ Socks5Session::Socks5Session(asio::io_context &io, tcp::socket socket, SessionMu
                                                       //prepare_for_forwarding(msg, "1.1 my-proxy", socket_.local_endpoint().address().to_string());
                                                       std::string s = msg.serialize_headers_only();
                                                       //PLOG_DEBUG << "http headers: " << s;
-                                                      std::vector<uint8_t> v(s.size());
-                                                      std::memcpy(v.data(), s.data(), s.size());
-                                                      write_to_client(v); });
+                                                      write_to_client(reinterpret_cast<const uint8_t *>(s.data()), s.size()); });
     http_response_parser_.set_on_body([this](const char *data, std::size_t len)
                                       {
     if (http_response_parser_.message().chunked)
     {
         // 重新编码为 chunked 格式: <hex-length>\r\n<data>\r\n
-        std::ostringstream oss;
-        oss << std::hex << len << "\r\n";
-        std::string chunk_header = oss.str();
+        char hexbuf[24];
+        int hlen = std::snprintf(hexbuf, sizeof(hexbuf), "%zx\r\n", len);
 
         std::vector<uint8_t> v;
-        v.reserve(chunk_header.size() + len + 2);
+        v.reserve(hlen + len + 2);
 
-        // chunk size 行
-        v.insert(v.end(), chunk_header.begin(), chunk_header.end());
-        // chunk data
+        v.insert(v.end(), hexbuf, hexbuf + hlen);   // 用 insert 代替 memcpy，size() 正确更新
         v.insert(v.end(), data, data + len);
-        // 结尾 CRLF
         v.push_back('\r');
         v.push_back('\n');
 
-        write_to_client(v);
+        write_to_client(std::move(v));
     }
     else
     {
-        std::vector<uint8_t> v(len);
-        std::memcpy(v.data(), data, len);
-        write_to_client(v);
+        write_to_client(reinterpret_cast<const uint8_t*>(data), len);
     } });
 
     http_response_parser_.set_on_error([this](int errno_code, std::string_view reason)
@@ -107,7 +99,7 @@ Socks5Session::Socks5Session(asio::io_context &io, tcp::socket socket, SessionMu
                                                       if(http_response_parser_.message().chunked)
                                                     {
                                                         std::vector<uint8_t> v{'0', '\r', '\n', '\r', '\n'};
-                                                        write_to_client(v); 
+                                                        write_to_client(std::move(v)); 
                                                     } });
 }
 
@@ -364,7 +356,7 @@ void Socks5Session::request_remote_connect_for_https()
                                 PLOG_WARNING << "self expired";
                                 return;
                             }
-                            self->write_to_client(std::vector<uint8_t>(d, d + n)); });
+                            self->write_to_client(d, n); });
     session_->set_on_synack([weak_self](bool ok)
                             {
                                 if (weak_self.expired())
@@ -383,6 +375,8 @@ void Socks5Session::request_remote_connect_for_https()
                                 if(!ok)
                                 {
                                     PLOG_ERROR << "https connect failed session_id=" << self->session_id_;
+                                    self->close_session();
+                                    return;
                                 }
                                 PLOG_INFO << "https connect success session_id=" << self->session_id_; });
     session_->set_on_close([weak_self]()
@@ -586,7 +580,7 @@ void Socks5Session::request_remote_connect()
                                         PLOG_WARNING << "Socks5Session close self expired";
                                         return;
                                     }
-                                    self->write_to_client(std::vector<uint8_t>(d, d + n)); });
+                                    self->write_to_client(d, n); });
     session_->set_on_synack([weak_self](bool ok)
                             {
                                 if (weak_self.expired())
@@ -738,30 +732,82 @@ void Socks5Session::do_read_from_client_for_udp()
         });
 }
 
-void Socks5Session::write_to_client(const std::vector<uint8_t> &v)
+void Socks5Session::write_to_client(const uint8_t *data, size_t size)
 {
-    bool writing = !write_queue_.empty();
-    write_queue_.emplace_back(std::move(v));
-    if (!writing)
+    write_queue_.emplace_back(data, data + size);
+    if (!is_writing_)
+    {
+        is_writing_ = true;
         do_write_to_client();
+    }
+}
+
+void Socks5Session::write_to_client(std::vector<uint8_t> v)
+{
+    write_queue_.emplace_back(std::move(v));
+    if (!is_writing_)
+    {
+        is_writing_ = true;
+        do_write_to_client();
+    }
 }
 
 void Socks5Session::do_write_to_client()
 {
     auto self(shared_from_this());
+
+    constexpr size_t MAX_BUFFERS = 32;
+    constexpr size_t MAX_BYTES = 64 * 1024;
+
+    std::vector<asio::const_buffer> buffers;
+    buffers.reserve(MAX_BUFFERS);
+
+    size_t count = 0;
+    size_t total_bytes = 0;
+
+    for (auto &v : write_queue_)
+    {
+        buffers.emplace_back(asio::buffer(v));
+        total_bytes += v.size();
+        if (++count >= MAX_BUFFERS || total_bytes >= MAX_BYTES)
+            break;
+    }
+
     asio::async_write(
-        socket_, asio::buffer(write_queue_.front()),
-        [self](std::error_code ec, std::size_t)
+        socket_, buffers,
+        [self, count](std::error_code ec, std::size_t)
         {
             if (ec)
             {
                 PLOG_ERROR << "write do_write_to_client error " << ec.message() << "session_id=" << self->session_id_;
+                self->write_queue_.clear();
                 self->close_session();
                 return;
             }
-            self->write_queue_.pop_front();
+            for (size_t i = 0; i < count; ++i)
+            {
+                self->write_queue_.pop_front();
+            }
+
+            if (self->ctrl_type_ == p2psocks::CtrlType::receive && self->write_queue_.size() > 1000)
+            {
+                self->ctrl_type_ = p2psocks::CtrlType::pause;
+                self->mux_.send_data_ctrl(self->session_->stream_id(), p2psocks::CtrlType::pause);
+            }
+            else if (self->ctrl_type_ == p2psocks::CtrlType::pause && self->write_queue_.size() < 300)
+            {
+                self->ctrl_type_ = p2psocks::CtrlType::receive;
+                self->mux_.send_data_ctrl(self->session_->stream_id(), p2psocks::CtrlType::receive);
+            }
+
             if (!self->write_queue_.empty())
+            {
                 self->do_write_to_client();
+            }
+            else
+            {
+                self->is_writing_ = false;
+            }
         });
 }
 

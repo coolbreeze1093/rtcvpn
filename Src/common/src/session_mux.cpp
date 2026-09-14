@@ -280,6 +280,26 @@ namespace p2psocks
             }
             break;
         }
+        case FrameType::DATA_CTRL:
+        {
+            if (auto s = session_manager_.find_session(h.stream_id))
+            {
+                if (s->on_data_ctrl_)
+                {
+                    s->on_data_ctrl_(CtrlType(payload[0]));
+                }
+                else
+                {
+                    PLOG_WARNING << "session found stream_id " << h.stream_id << " on_data_ctrl_ not set";
+                }
+            }
+            else
+            {
+                PLOG_WARNING << "session not found stream_id " << h.stream_id;
+                return;
+            }
+                   }
+        break;
         default:
         {
             PLOG_WARNING << "invalid frame type stream_id " << h.stream_id;
@@ -470,6 +490,20 @@ namespace p2psocks
         else
         {
             PLOG_WARNING << "send_http_data: send_func_ is not set";
+        }
+    }
+
+    void SessionMux::send_data_ctrl(uint32_t stream_id, CtrlType type)
+    {
+        uint8_t ctrl_type = type == CtrlType::receive ? 0 : 1;
+        auto frame = make_frame(stream_id, FrameType::DATA_CTRL, &ctrl_type, 1);
+        if (send_func_)
+        {
+            send_func_(peer_conn_id_, frame.data(), frame.size());
+        }
+        else
+        {
+            PLOG_WARNING << "send_data_ctrl: send_func_ is not set";
         }
     }
 } // namespace p2psocks

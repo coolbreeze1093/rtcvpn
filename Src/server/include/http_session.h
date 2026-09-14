@@ -43,6 +43,9 @@ private:
 
     void close_func();
 
+    void start_receive(){if(!is_receiving_){is_receiving_ = true;do_read_from_target();}}
+    void pause_receive(){is_receiving_ = false;};
+
     asio::io_context &io_;
     std::weak_ptr<SessionMux> weak_mux_;
     std::shared_ptr<Session> session_;
@@ -60,4 +63,8 @@ private:
     std::string http_request_;
     std::string http_response_;
     HttpParser http_parse_response_;
+
+    bool is_receiving_ = true;
+
+    bool is_sending_ = false;
 };

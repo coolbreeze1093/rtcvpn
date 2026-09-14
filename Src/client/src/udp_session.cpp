@@ -119,7 +119,7 @@ void UdpSession::start_receive()
 
             if (bytes_recvd <= 0)
             {
-                PLOG_WARNING << "invalid packet bytes_recvd <= 0, stream_id:"<<self->session_->stream_id();
+                PLOG_WARNING << "invalid packet bytes_recvd <= 0, stream_id:" << self->session_->stream_id();
                 return;
             }
 
@@ -127,17 +127,17 @@ void UdpSession::start_receive()
             {
                 self->client_endpoint_ = self->remote_endpoint_;
                 self->client_known_ = true;
-                PLOG_INFO << "first packet, record client endpoint stream_id:"<<self->session_->stream_id() << " " << self->client_endpoint_.address().to_string() << ":" << self->client_endpoint_.port();
+                PLOG_INFO << "first packet, record client endpoint stream_id:" << self->session_->stream_id() << " " << self->client_endpoint_.address().to_string() << ":" << self->client_endpoint_.port();
             }
             else if (self->remote_endpoint_.address() != self->client_endpoint_.address())
             {
-                PLOG_WARNING << "source ip changed, reject packet stream_id:"<<self->session_->stream_id();
+                PLOG_WARNING << "source ip changed, reject packet stream_id:" << self->session_->stream_id();
                 self->start_receive();
                 return;
             }
             else if (self->remote_endpoint_.port() != self->client_endpoint_.port())
             {
-                PLOG_INFO << "port changed, update client endpoint stream_id:"<<self->session_->stream_id();
+                PLOG_INFO << "port changed, update client endpoint stream_id:" << self->session_->stream_id();
                 self->client_endpoint_ = self->remote_endpoint_;
             }
 
@@ -151,7 +151,7 @@ void UdpSession::start_receive()
             }
             else
             {
-                PLOG_ERROR << "invalid network type stream_id:"<<self->session_->stream_id();
+                PLOG_ERROR << "invalid network type stream_id:" << self->session_->stream_id();
             }
             self->start_receive();
         });
@@ -161,7 +161,7 @@ void UdpSession::send_ipv4(std::size_t bytes_recvd, const std::string &local_hos
 {
     if (bytes_recvd < 10)
     {
-        PLOG_WARNING << "invalid ipv4 packet stream_id:"<<session_->stream_id();
+        PLOG_WARNING << "invalid ipv4 packet stream_id:" << session_->stream_id();
         return;
     }
     char tmp[32];
@@ -178,13 +178,13 @@ void UdpSession::send_domain(std::size_t bytes_recvd, const std::string &local_h
 {
     if (bytes_recvd < 5)
     {
-        PLOG_WARNING << "invalid domain packet stream_id:"<<session_->stream_id();
+        PLOG_WARNING << "invalid domain packet stream_id:" << session_->stream_id();
         return;
     }
     int len = recv_buf_[4];
     if (5 + len + 2 > (int)bytes_recvd)
     {
-        PLOG_WARNING << "invalid domain packet 2 stream_id:"<<session_->stream_id();
+        PLOG_WARNING << "invalid domain packet 2 stream_id:" << session_->stream_id();
         return;
     }
 
@@ -200,8 +200,8 @@ void UdpSession::send(std::shared_ptr<std::vector<uint8_t>> data)
     send_queue_.push_back(std::move(data));
     if (!sending_)
     {
-        do_send_next();
         sending_ = true;
+        do_send_next();
     }
 }
 
@@ -217,10 +217,20 @@ void UdpSession::do_send_next()
             if (ec)
             {
                 PLOG_ERROR << "send error: "
-                          << ec.message() << " stream_id:"<<self->session_->stream_id();
+                           << ec.message() << " stream_id:" << self->session_->stream_id();
                 return;
             }
             self->send_queue_.pop_front();
+
+            if (self->send_queue_.size() > 1000)
+            {
+                self->mux_.send_data_ctrl(self->session_->stream_id(), p2psocks::CtrlType::pause);
+            }
+            else if (self->send_queue_.size() < 200)
+            {
+                self->mux_.send_data_ctrl(self->session_->stream_id(), p2psocks::CtrlType::receive);
+            }
+
             if (!self->send_queue_.empty())
             {
                 self->do_send_next();

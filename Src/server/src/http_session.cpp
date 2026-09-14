@@ -205,14 +205,40 @@ void HttpSession::setup_session_callbacks()
         }
         auto self = weak_self.lock();
         self->close(); });
+    session_->set_on_data_ctrl([weak_self](CtrlType ctrl)
+                                {
+        if(weak_self.expired())
+        {
+            PLOG_ERROR << "weak_self is expired";
+            return;
+        }
+        auto self = weak_self.lock();
+        if (!self)
+        {
+            PLOG_ERROR << "self is expired";
+            return;
+        }
+        switch (ctrl)
+        {
+        case CtrlType::receive:
+            self->start_receive();
+            break;
+        case CtrlType::pause:
+            self->pause_receive();
+            break;
+        }
+        });
+        
 }
 
 void HttpSession::write_to_target(const std::vector<uint8_t> &v)
 {
-    bool writing = !to_target_queue_.empty();
     to_target_queue_.emplace_back(std::move(v));
-    if (!writing)
-        do_write_to_target();
+    if (!is_sending_) 
+    {
+        is_sending_ = true;
+        do_write_to_target(); 
+    }
 }
 
 void HttpSession::do_write_to_target()
@@ -230,7 +256,13 @@ void HttpSession::do_write_to_target()
             }
             to_target_queue_.pop_front();
             if (!to_target_queue_.empty())
+            {
                 do_write_to_target();
+            }
+            else
+            {
+                is_sending_ = false;
+            }
         });
 }
 
@@ -265,7 +297,10 @@ void HttpSession::do_read_from_target()
             {
                 weak_mux_.lock()->send_http_data(stream_id_, target_buf_.data(), n);
             }
-            do_read_from_target();
+            if(is_receiving_)
+            {
+                do_read_from_target();
+            }
         });
 }
 

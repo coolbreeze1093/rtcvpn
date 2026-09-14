@@ -29,9 +29,14 @@ private:
 
     void do_send_next();
 
-    void start_receive();
+    void do_read_from_target();
 
     void close_func();
+
+    void start_receive(){if(!is_receiving_){is_receiving_ = true;do_read_from_target();}}
+    void pause_receive(){is_receiving_ = false;};
+
+    bool is_receiving_ = true;
 
     asio::io_context &io_;
     udp::socket socket_;
