@@ -43,4 +43,8 @@ private:
     BinaryMessageCallback data_channel_binary_callback_;
     SignalOutCallback     signal_out_callback_;
     StateCallback         state_change_callback_;
+
+    bool is_closed_ = false;
+
+    std::mutex mutex_;
 };

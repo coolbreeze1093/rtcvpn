@@ -460,6 +460,11 @@ namespace p2psocks
             return message_complete_;
         }
 
+        bool is_chunked() const
+        {
+            return is_chunked_;
+        }
+
         // llhttp 在遇到 upgrade（如 CONNECT / WebSocket）时会停止解析，
         // 剩余没消费的字节需要调用方自己处理（比如透传给隧道）。
         std::string take_remaining()
@@ -671,7 +676,7 @@ namespace p2psocks
                 s->message_.reason = s->cur_status_;
             }
 
-            s->message_.chunked = (p->flags & F_CHUNKED) != 0;
+            s-> is_chunked_ = s->message_.chunked = (p->flags & F_CHUNKED) != 0;
             s->message_.upgrade = (p->upgrade != 0);
             s->message_.connection_keep_alive =
                 (p->flags & F_CONNECTION_KEEP_ALIVE) != 0;
@@ -754,6 +759,8 @@ namespace p2psocks
         bool had_error_ = false;
 
         std::string remaining_after_upgrade_;
+
+        bool is_chunked_ = false;
     };
 
     // 在转发前调用，原地清理 message，使其适合发给下一跳
@@ -765,8 +772,7 @@ namespace p2psocks
         // 1. 收集 Connection 头里点名的 hop-by-hop 头名
         std::vector<std::string> hop_by_hop = {
             "Proxy-Authenticate",
-            "Proxy-Authorization", "TE", "Trailer",
-            "Upgrade"};
+            "Proxy-Authorization", "TE", "Trailer","Proxy-Connection"};
 
         for (const auto &h : msg.headers)
         {

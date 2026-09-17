@@ -1,11 +1,13 @@
 #include "process_new_client.h"
 #include <plog/Log.h>
+#include "tunel_session.h"
 
 Socks5Session::Socks5Session(asio::io_context &io,
                              rtc::Configuration &config,
                              uint32_t session_id)
     : io_(io), config_(config), session_id_(session_id),
-      mux_(std::make_shared<SessionMux>(session_id)) // 每个 Socks5Session 独立的 mux，peer_conn_id 用 session_id 即可
+      mux_(session_id),
+      timer_(std::make_shared<Timer>(io))
 {
     PLOG_DEBUG << "Socks5Session created  " << session_id;
 }
@@ -15,7 +17,6 @@ Socks5Session::~Socks5Session()
     PLOG_DEBUG << "~Socks5Session destroyed  " << session_id_;
     p2p_.reset();
     ws_.reset();
-    mux_.reset();
 }
 
 void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
@@ -51,6 +52,20 @@ void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
         } });
 
     ws_->connect(ws);
+
+    timer_->bindTimerFinish([self = shared_from_this()]()
+                            {
+                                if(self->tunnel_sessions_.empty())
+                                {
+                                    if (self->close_cb_)
+                                        self->close_cb_(self->session_id_);
+                                    self->timer_.reset();
+                                } 
+                                else
+                                {
+                                    self->timer_->start(5000);
+                                }
+                            });
 }
 
 void Socks5Session::bindCloseFunc(std::function<void(uint32_t)> cb)
@@ -94,7 +109,7 @@ void Socks5Session::onLoginSuccess()
                 auto self = weak_this.lock();
                 if(self)
                 {
-                    self->mux_->on_p2p_data(1, result->payload, result->len); 
+                    self->mux_.on_p2p_data(1, result->payload, result->len); 
                 } });
 
     p2p_->bindCloseFunc([weak_this](uint32_t session_id)
@@ -105,19 +120,20 @@ void Socks5Session::onLoginSuccess()
                                 PLOG_ERROR << "weak_this is expired";
                                 return;
                             }
-                            if (auto self = weak_this.lock())
+                            auto self = weak_this.lock();
+                            if (!self)
                             {
-                                for (auto &session : self->tcp_sessions_)
-                                {
-                                    session.second->close();
-                                }
-                                for (auto &session : self->udp_sessions_)
-                                {
-                                    session.second->close();
-                                }
-                                self->ws_->disconnect();
+                                PLOG_ERROR << "weak_this is expired";
+                                return;
                             }
 
+                            for (auto &session : self->tunnel_sessions_)
+                            {
+                                session.second->close();
+                            }
+                            self->ws_->disconnect();
+
+                            self->timer_->start(5000);
                             // 通知 ws 关闭
                         });
 
@@ -147,7 +163,7 @@ void Socks5Session::onLoginSuccess()
             self->p2p_->addRemoteCandidate(candidate, mid);
         } });
 
-    mux_->set_send_func([weak_this](uint32_t conn_id, const uint8_t *data, size_t len)
+    mux_.set_send_func([weak_this](uint32_t conn_id, const uint8_t *data, size_t len)
                         {
         try
         {
@@ -172,8 +188,8 @@ void Socks5Session::onLoginSuccess()
         } });
 
     // 每个连接自己的 SessionMux，注册自己的 on_syn / on_udp_syn
-    mux_->set_on_syn([weak_this](uint32_t stream_id,
-                                 const std::string &host, uint16_t port)
+    mux_.set_on_syn([weak_this](uint32_t stream_id,
+                                 const std::string &host, uint16_t port, Protocol protocol)
                      {
         if(weak_this.expired())
         {
@@ -188,8 +204,8 @@ void Socks5Session::onLoginSuccess()
         }
         PLOG_DEBUG << "rev tcp syn " << host << ":" << port
                   << " (stream_id=" << stream_id << ", session=" << self->session_id_ << ")\n";
-        auto rs = std::make_shared<TcpSession>(self->io_, self->mux_, stream_id);
-        self->tcp_sessions_[stream_id] = rs;
+        auto rs = std::make_shared<TunnelSession>(self->io_, self->mux_, stream_id, protocol);
+        self->tunnel_sessions_[stream_id] = rs;
         rs->bind_close_func([weak_this](uint32_t stream_id)
         {
             if(weak_this.expired())
@@ -200,75 +216,11 @@ void Socks5Session::onLoginSuccess()
             auto self = weak_this.lock();
             if(self)
             {
-                self->tcp_sessions_.erase(stream_id);
+                PLOG_DEBUG << "tunnel_sessions_ erase TunnelSession  " << stream_id;
+                self->tunnel_sessions_.erase(stream_id);
             }
         });
-        rs->connect_target(host, port); });
-
-    mux_->set_on_udp_syn([weak_this](uint32_t stream_id)
-                         {
-                            if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-        auto self = weak_this.lock();
-        if(!self)
-        {
-            PLOG_ERROR << "weak_this is expired";
-
-            return;
-        }
-        PLOG_DEBUG << "rev udp syn (stream_id=" << stream_id
-                  << ", session=" << self->session_id_ << ")\n";
-        auto udp = std::make_shared<UdpClient>(self->io_, self->mux_, stream_id);
-        self->udp_sessions_[stream_id] = udp;
-        udp->bind_close_func([weak_this](uint32_t stream_id)
-        {
-            if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-            auto self = weak_this.lock();
-            if(self)
-            {
-                self->udp_sessions_.erase(stream_id);
-            }
-        });
-        udp->start(); });
-
-    mux_->set_on_http_syn([weak_this](uint32_t stream_id, const std::string &host, uint16_t port)
-                          {
-                              if (weak_this.expired())
-                              {
-                                  PLOG_ERROR << "weak_this is expired";
-                                  return;
-                              }
-                              auto self = weak_this.lock();
-                              if (!self)
-                              {
-                                  PLOG_ERROR << "weak_this is expired";
-                                  return;
-                              }
-                              PLOG_DEBUG << "rev http syn (stream_id=" << stream_id
-                                         << ", session=" << self->session_id_ << ")\n";
-                              auto http = std::make_shared<HttpSession>(self->io_, self->mux_, stream_id);
-                              self->http_sessions_[stream_id] = http;
-                              http->bind_close_func([weak_this](uint32_t stream_id)
-                                                    {
-                                if(weak_this.expired())
-                                {
-                                    PLOG_ERROR << "weak_this is expired";
-                                    return;
-                                } 
-                                if(auto self = weak_this.lock())
-                                {
-                                    self->http_sessions_.erase(stream_id);
-                                }
-                            });
-                              http->connect_target(host, port);
-                          });
+        rs->start(host, port); });
 }
 
 void Socks5Session::notifyClose()
@@ -277,8 +229,6 @@ void Socks5Session::notifyClose()
     {
         p2p_->close();
     }
-    if (close_cb_)
-        close_cb_(session_id_);
 }
 
 ProcessNewWsClient::ProcessNewWsClient(asio::io_context &io, rtc::Configuration config)
@@ -298,7 +248,11 @@ void ProcessNewWsClient::newClient(std::shared_ptr<rtc::WebSocket> ws)
 
     auto session = std::make_shared<Socks5Session>(io_, config_, id);
     session->bindCloseFunc([this](uint32_t session_id)
-                           { client_sessions_.erase(session_id); });
+                           { 
+                             PLOG_DEBUG << "ProcessNewWsClient remove session::  " << session_id;
+                            client_sessions_.erase(session_id);
+                        
+                        });
 
     client_sessions_[id] = session;
     session->start(ws);

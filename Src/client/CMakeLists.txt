@@ -13,6 +13,9 @@ add_executable(client
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_id_generator.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/p2p_client.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/signaling.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/tcp_socket.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/udp_socket.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/crash_dump.cpp
 )
 
 target_include_directories(client
@@ -22,9 +25,10 @@ target_include_directories(client
     include)
 
 if(UNIX)
-
+#pragma comment(lib, "dbghelp.lib")
+#pragma comment(lib, "shlwapi.lib")
 elseif(WIN32)
-    set(windows_libs ws2_32 mswsock)
+    set(windows_libs ws2_32 mswsock dbghelp shlwapi)
 endif()
 
 

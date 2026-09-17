@@ -13,51 +13,27 @@
 #include <memory>
 #include "session_mux.h"
 #include <array>
+#include "session_interface.h"
+#include "tcp_socket.h"
 
 using asio::ip::tcp;
 using namespace p2psocks;
 
-class TcpSession : public std::enable_shared_from_this<TcpSession>
+class TcpSession : public std::enable_shared_from_this<TcpSession>, public SessionInterface
 {
 public:
-    TcpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
-              uint32_t stream_id);
+    TcpSession(asio::io_context &io);
 
     ~TcpSession();
 
-    void bind_close_func(std::function<void(uint32_t stream_id)> func);
+    void start(const std::string &host, uint16_t port) override;
 
-    void connect_target(const std::string &host, uint16_t port);
+    void close() override;
 
-    void close();
+    void revP2pData(const uint8_t *d, size_t n) override;
+    void start_receive() override;
+    void pause_receive() override;
 
 private:
-    void setup_session_callbacks();
-
-    void do_write_to_target();
-
-    void do_read_from_target();
-
-    void close_func();
-
-    void start_receive(){if(!is_receiving_){is_receiving_ = true;do_read_from_target();}}
-
-    void pause_receive(){is_receiving_ = false;};
-
-    asio::io_context &io_;
-    std::weak_ptr<SessionMux> weak_mux_;
-    std::shared_ptr<Session> session_;
-    std::function<void(uint32_t stream_id)> close_func_;
-    tcp::socket target_socket_;
-    std::array<uint8_t, 8192> target_buf_{};
-    std::deque<std::vector<uint8_t>> to_target_queue_;
-    bool is_closed_ = false;
-    uint32_t stream_id_ = 0;
-    std::mutex mutex_;
-    std::string host_;
-    uint16_t port_ = 0;
-
-    bool is_receiving_ = true;
-
-    bool is_sending_ = false;
+    std::shared_ptr<TcpSocket> socket_;
 };

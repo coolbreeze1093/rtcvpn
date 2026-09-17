@@ -9,9 +9,13 @@ add_executable(server
     src/tcp_session.cpp
     src/process_new_client.cpp
     src/http_session.cpp
+    src/tunel_session.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_protocol.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_mux.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_id_generator.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/tcp_socket.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/udp_socket.cpp
+    
 )
 
 target_include_directories(server

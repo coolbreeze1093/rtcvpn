@@ -11,60 +11,32 @@
 #include <deque>
 #include <iostream>
 #include <memory>
-#include "session_mux.h"
 #include <array>
 #include "http_parse.h"
+#include "session_interface.h"
+#include "tcp_socket.h"
 
 using asio::ip::tcp;
 using namespace p2psocks;
 
-class HttpSession : public std::enable_shared_from_this<HttpSession>
+class HttpSession : public std::enable_shared_from_this<HttpSession>, public SessionInterface
 {
 public:
-    HttpSession(asio::io_context &io, std::weak_ptr<SessionMux> weak_mux,
-              uint32_t stream_id);
+    HttpSession(asio::io_context &io);
 
     ~HttpSession();
 
-    void bind_close_func(std::function<void(uint32_t stream_id)> func);
+    void start(const std::string &host, uint16_t port) override;
 
-    void connect_target(const std::string &host, uint16_t port);
+    void close() override;
 
-    void close();
+    void revP2pData(const uint8_t *d, size_t n) override;
+
+    void start_receive() override;
+
+    void pause_receive() override;
 
 private:
-    void setup_session_callbacks();
-    
-    void write_to_target(const std::vector<uint8_t> &v);
-    
-    void do_write_to_target();
-
-    void do_read_from_target();
-
-    void close_func();
-
-    void start_receive(){if(!is_receiving_){is_receiving_ = true;do_read_from_target();}}
-    void pause_receive(){is_receiving_ = false;};
-
-    asio::io_context &io_;
-    std::weak_ptr<SessionMux> weak_mux_;
-    std::shared_ptr<Session> session_;
-    std::function<void(uint32_t stream_id)> close_func_;
-    tcp::socket target_socket_;
-    std::array<uint8_t, 8192> target_buf_{};
-    std::deque<std::vector<uint8_t>> to_target_queue_;
-    bool is_closed_ = false;
-    uint32_t stream_id_ = 0;
-    std::mutex mutex_;
-    std::string host_;
-    uint16_t port_ = 0;
-
+    std::shared_ptr<TcpSocket> target_socket_;
     HttpParser http_parse_request_;
-    std::string http_request_;
-    std::string http_response_;
-    HttpParser http_parse_response_;
-
-    bool is_receiving_ = true;
-
-    bool is_sending_ = false;
 };

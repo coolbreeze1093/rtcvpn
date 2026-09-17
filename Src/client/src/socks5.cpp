@@ -38,9 +38,9 @@ void SocksServer::stop()
 
     for(auto &s : sessions_)
     {
+        s.second->set_on_close(nullptr);
         s.second->close();
     }
-    sessions_.clear();
 }
 
 void SocksServer::do_accept()

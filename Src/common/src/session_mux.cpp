@@ -11,9 +11,9 @@ namespace p2psocks
     void Session::set_on_data(DataCallback cb) { on_data_ = std::move(cb); }
     void Session::set_on_synack(SynAckCallback cb) { on_synack_ = std::move(cb); }
     void Session::set_on_close(CloseCallback cb) { on_close_ = std::move(cb); }
-    void Session::set_on_udp_data(UdpCallback cb) { on_udp_data_ = std::move(cb); }
+    /* void Session::set_on_udp_data(UdpCallback cb) { on_udp_data_ = std::move(cb); }
     void Session::set_on_udp_synack(UdpSynackCallback cb) { on_udp_synack_ = std::move(cb); }
-    void Session::set_on_udp_close(CloseCallback cb) { on_udp_close_ = std::move(cb); }
+    void Session::set_on_udp_close(CloseCallback cb) { on_udp_close_ = std::move(cb); } */
 
     SessionMux::SessionMux(uint32_t peer_conn_id)
         : peer_conn_id_(peer_conn_id) {}
@@ -22,7 +22,7 @@ namespace p2psocks
 
     void SessionMux::set_on_syn(SynHandler h) { on_syn_ = std::move(h); }
 
-    void SessionMux::set_on_udp_syn(UdpSynHandler h) { on_udp_syn_ = std::move(h); }
+    /* void SessionMux::set_on_udp_syn(UdpSynHandler h) { on_udp_syn_ = std::move(h); } */
 
     void SessionMux::on_p2p_data(uint32_t /*conn_id*/, const uint8_t *data, size_t len)
     {
@@ -50,7 +50,7 @@ namespace p2psocks
 
             if (on_syn_)
             {
-                on_syn_(h.stream_id, host, port);
+                on_syn_(h.stream_id, host, port, h.protocol);
             }
             else
             {
@@ -65,7 +65,7 @@ namespace p2psocks
                 bool ok = plen >= 1 && payload[0] == 0;
                 if (s->on_synack_)
                 {
-                    s->on_synack_(ok);
+                    s->on_synack_(ok, h.protocol);
                 }
                 else
                 {
@@ -86,7 +86,7 @@ namespace p2psocks
             {
                 if (s->on_data_)
                 {
-                    s->on_data_(payload, plen);
+                    s->on_data_(payload, plen, h.protocol);
                 }
                 else
                 {
@@ -106,7 +106,7 @@ namespace p2psocks
             {
                 if (s->on_close_)
                 {
-                    s->on_close_();
+                    s->on_close_(h.protocol);
                 }
                 else
                 {
@@ -120,7 +120,7 @@ namespace p2psocks
             }
             break;
         }
-        case FrameType::UDP_SYN:
+        /* case FrameType::UDP_SYN:
         {
             if (on_udp_syn_)
             {
@@ -279,14 +279,21 @@ namespace p2psocks
                 return;
             }
             break;
-        }
+        } */
         case FrameType::DATA_CTRL:
         {
             if (auto s = session_manager_.find_session(h.stream_id))
             {
                 if (s->on_data_ctrl_)
                 {
-                    s->on_data_ctrl_(CtrlType(payload[0]));
+                    if (plen >= 1)
+                    {
+                        s->on_data_ctrl_(CtrlType(payload[0]), h.protocol);
+                    }
+                    else
+                    {
+                        PLOG_WARNING << "invalid data ctrl payload stream_id " << h.stream_id;
+                    }
                 }
                 else
                 {
@@ -328,10 +335,10 @@ namespace p2psocks
         session_manager_.remove_session(stream_id);
     }
 
-    void SessionMux::send_syn(uint32_t stream_id, const std::string &host, uint16_t port)
+    void SessionMux::send_syn(uint32_t stream_id, const std::string &host, uint16_t port, Protocol protocol)
     {
         auto payload = encode_syn_payload(host, port);
-        auto frame = make_frame(stream_id, FrameType::SYN, payload.data(),
+        auto frame = make_frame(stream_id, FrameType::SYN, protocol, payload.data(),
                                 payload.size());
         if (send_func_)
         {
@@ -343,10 +350,10 @@ namespace p2psocks
         }
     }
 
-    void SessionMux::send_synack(uint32_t stream_id, bool ok)
+    void SessionMux::send_synack(uint32_t stream_id, bool ok, Protocol protocol)
     {
         uint8_t status = ok ? 0 : 1;
-        auto frame = make_frame(stream_id, FrameType::SYNACK, &status, 1);
+        auto frame = make_frame(stream_id, FrameType::SYNACK, protocol, &status, 1);
         if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
@@ -357,9 +364,9 @@ namespace p2psocks
         }
     }
 
-    void SessionMux::send_data(uint32_t stream_id, const uint8_t *data, size_t len)
+    void SessionMux::send_data(uint32_t stream_id, const uint8_t *data, size_t len, Protocol protocol)
     {
-        auto frame = make_frame(stream_id, FrameType::DATA, data, len);
+        auto frame = make_frame(stream_id, FrameType::DATA, protocol, data, len);
         if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
@@ -370,9 +377,9 @@ namespace p2psocks
         }
     }
 
-    void SessionMux::send_fin(uint32_t stream_id)
+    void SessionMux::send_fin(uint32_t stream_id, Protocol protocol)
     {
-        auto frame = make_frame(stream_id, FrameType::FIN);
+        auto frame = make_frame(stream_id, FrameType::FIN, protocol);
         if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
@@ -383,7 +390,7 @@ namespace p2psocks
         }
     }
 
-    void SessionMux::send_udp_syn(uint32_t stream_id)
+    /* void SessionMux::send_udp_syn(uint32_t stream_id)
     {
         auto frame = make_frame(stream_id, FrameType::UDP_SYN);
         if (send_func_)
@@ -421,13 +428,13 @@ namespace p2psocks
         {
             PLOG_WARNING << "send_udp_fin: send_func_ is not set";
         }
-    }
+    } */
 
-    void SessionMux::send_udp(uint32_t stream_id, const std::string &host, uint16_t port,
+    /* void SessionMux::send_udp(uint32_t stream_id, const std::string &host, uint16_t port,
                               const std::vector<uint8_t> &data)
     {
         auto payload = encode_udp_payload(host, port, data);
-        auto frame = make_frame(stream_id, FrameType::UDP_DATA, payload.data(), payload.size());
+        auto frame = make_frame(stream_id, FrameType::DATA, payload.data(), payload.size());
         if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());
@@ -436,9 +443,9 @@ namespace p2psocks
         {
             PLOG_WARNING << "send_udp: send_func_ is not set";
         }
-    }
+    } */
 
-    void SessionMux::send_http_syn(uint32_t stream_id, const std::string &host, uint16_t port)
+    /* void SessionMux::send_http_syn(uint32_t stream_id, const std::string &host, uint16_t port)
     {
         auto payload = encode_syn_payload(host, port);
         auto frame = make_frame(stream_id, FrameType::HTTP_SYN, payload.data(), payload.size());
@@ -491,12 +498,12 @@ namespace p2psocks
         {
             PLOG_WARNING << "send_http_data: send_func_ is not set";
         }
-    }
+    } */
 
-    void SessionMux::send_data_ctrl(uint32_t stream_id, CtrlType type)
+    void SessionMux::send_data_ctrl(uint32_t stream_id, CtrlType type, Protocol protocol)
     {
         uint8_t ctrl_type = type == CtrlType::receive ? 0 : 1;
-        auto frame = make_frame(stream_id, FrameType::DATA_CTRL, &ctrl_type, 1);
+        auto frame = make_frame(stream_id, FrameType::DATA_CTRL, protocol, &ctrl_type, 1);
         if (send_func_)
         {
             send_func_(peer_conn_id_, frame.data(), frame.size());

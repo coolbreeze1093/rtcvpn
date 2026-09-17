@@ -3,15 +3,14 @@
 #include <iostream>
 #include <memory>
 #include "session_mux.h"
-using asio::ip::udp;
-using SessionMux = p2psocks::SessionMux;
-using Session = p2psocks::Session;
-
+#include "udp_socket.h"
 class UdpSession : public std::enable_shared_from_this<UdpSession>
 {
-
+    using SessionMux = p2psocks::SessionMux;
+    using Session = p2psocks::Session;
+    using UdpSocket = p2psocks::UdpSocket;
 public:
-    UdpSession(asio::io_context &io_context, SessionMux &mux, std::shared_ptr<Session> session, uint32_t session_id);
+    UdpSession(asio::io_context &io_context, SessionMux &mux, uint32_t session_id);
 
     ~UdpSession();
 
@@ -19,30 +18,26 @@ public:
 
     bool start();
 
+    void revP2pData(const uint8_t *d, size_t n);
+
     int getLocalPort();
 
     std::string get_local_ip();
+    void p2p_data_ctrl(p2psocks::CtrlType ctrl);
 
 private:
-    void start_receive();
+    void send_ipv4(const uint8_t *d, size_t n);
 
-    void send_ipv4(std::size_t bytes_recvd, const std::string &local_host, uint16_t local_port);
+    void send_domain(const uint8_t *d, size_t n);
 
-    void send_domain(std::size_t bytes_recvd, const std::string &local_host, uint16_t local_port);
-    // 发送回客户端
-    void send(std::shared_ptr<std::vector<uint8_t>> data);
-
-    void do_send_next();
+    void send_p2p_data(const uint8_t *d, size_t n);
 
     asio::io_context &io_;
     SessionMux &mux_;
-    std::shared_ptr<Session> session_;
-    std::vector<uint8_t> recv_buf_;
-    udp::socket socket_;
-    udp::endpoint remote_endpoint_;
-    udp::endpoint client_endpoint_;
-    std::deque<std::shared_ptr<std::vector<uint8_t>>> send_queue_;
-    bool sending_ = false;
+    std::shared_ptr<UdpSocket> socket_;
     bool client_known_ = false;
+    std::string remote_ip_;
+    uint16_t remote_port_;
     uint32_t session_id_;
+    p2psocks::Protocol protocol_ = p2psocks::Protocol::UdpAssociate;
 };

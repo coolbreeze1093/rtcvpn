@@ -14,35 +14,27 @@
 #include <memory>
 #include <random>
 #include <iostream>
-#include "session_protocol.h"
 #include <plog/Log.h>
+#include "session_protocol.h"
 
 namespace p2psocks
 {
-
     class SessionMux;
-    enum class CtrlType
-    {
-        receive,
-        pause,
-    };
-
     // 一条逻辑会话（对应一条浏览器 SOCKS5 连接 <-> 一条到目标的TCP连接）
     class Session
     {
     public:
-        using DataCallback = std::function<void(const uint8_t *, size_t)>;
-        using SynAckCallback = std::function<void(bool ok)>;
-        using CloseCallback = std::function<void()>;
-        using UdpCallback = std::function<void(const std::string &remote_host, uint16_t remote_port,
+        using DataCallback = std::function<void(const uint8_t *, size_t,Protocol)>;
+        using SynAckCallback = std::function<void(bool ok,Protocol)>;
+        using CloseCallback = std::function<void(Protocol)>;
+        /* using UdpCallback = std::function<void(const std::string &remote_host, uint16_t remote_port,
                                                std::shared_ptr<std::vector<uint8_t>> data)>;
         using UdpSynackCallback = std::function<void(bool ok)>;
 
         using HttpSynackCallback = std::function<void(bool ok)>;
         using HttpCloseCallback = std::function<void()>;
-        using HttpDataCallback = std::function<void(const uint8_t *, size_t)>;
-        
-        using DataCtrlCallback = std::function<void(CtrlType ctrl)>;
+        using HttpDataCallback = std::function<void(const uint8_t *, size_t)>; */
+        using DataCtrlCallback = std::function<void(CtrlType ctrl,Protocol)>;
 
         explicit Session(uint32_t stream_id);
 
@@ -51,23 +43,23 @@ namespace p2psocks
         void set_on_data(DataCallback cb);
         void set_on_synack(SynAckCallback cb);
         void set_on_close(CloseCallback cb);
-        void set_on_udp_data(UdpCallback cb);
+        /* void set_on_udp_data(UdpCallback cb);
         void set_on_udp_synack(UdpSynackCallback cb);
         void set_on_udp_close(CloseCallback cb);
         void set_on_http_synack(HttpSynackCallback cb) { on_http_synack_ = cb; }
         void set_on_http_close(HttpCloseCallback cb) { on_http_close_ = cb; }
-        void set_on_http_data(HttpDataCallback cb) { on_http_data_ = cb; }
+        void set_on_http_data(HttpDataCallback cb) { on_http_data_ = cb; } */
         void set_on_data_ctrl(DataCtrlCallback cb) { on_data_ctrl_ = cb; }
 
         DataCallback on_data_;
         SynAckCallback on_synack_;
         CloseCallback on_close_;
-        UdpCallback on_udp_data_;
+        /* UdpCallback on_udp_data_;
         UdpSynackCallback on_udp_synack_;
         CloseCallback on_udp_close_;
         HttpSynackCallback on_http_synack_;
         HttpCloseCallback on_http_close_;
-        HttpDataCallback on_http_data_;
+        HttpDataCallback on_http_data_; */
         DataCtrlCallback on_data_ctrl_;
 
     private:
@@ -144,18 +136,19 @@ namespace p2psocks
         // SynHandler: 远端角色用，收到新会话请求(host,port)时触发
         using SynHandler = std::function<void(uint32_t session_id,
                                               const std::string &host,
-                                              uint16_t port)>;
+                                              uint16_t port,
+                                              Protocol protocol)>;
 
-        using UdpSynHandler = std::function<void(uint32_t session_id)>;
-        using HttpSynHandler = std::function<void(uint32_t session_id, const std::string &host, uint16_t port)>;
+        /* using UdpSynHandler = std::function<void(uint32_t session_id)>;
+        using HttpSynHandler = std::function<void(uint32_t session_id, const std::string &host, uint16_t port)>; */
 
         // peer_conn_id: 你的 P2P 模块里代表"对端"的连接标识，由你在建立好P2P连接后传入
         SessionMux(uint32_t peer_conn_id);
 
         void set_send_func(SendFunc f);
         void set_on_syn(SynHandler h);
-        void set_on_udp_syn(UdpSynHandler h);
-        void set_on_http_syn(HttpSynHandler h) { on_http_syn_ = h; }
+        /* void set_on_udp_syn(UdpSynHandler h);
+        void set_on_http_syn(HttpSynHandler h) { on_http_syn_ = h; } */
 
         // ---------- 这个函数由你接到P2P模块的"收到数据"回调里调用 ----------
         // 例如: p2pModule.setOnReceive([&](uint32_t conn_id, const uint8_t* d, size_t n){
@@ -173,40 +166,40 @@ namespace p2psocks
         void remove_session(uint32_t stream_id);
 
         // ---------- 发送各类帧（内部调用你绑定的 send_func_） ----------
-        void send_syn(uint32_t stream_id, const std::string &host, uint16_t port);
+        void send_syn(uint32_t stream_id, const std::string &host, uint16_t port, Protocol protocol);
 
-        void send_synack(uint32_t stream_id, bool ok);
+        void send_synack(uint32_t stream_id, bool ok, Protocol protocol);
 
-        void send_data(uint32_t stream_id, const uint8_t *data, size_t len);
+        void send_data(uint32_t stream_id, const uint8_t *data, size_t len, Protocol protocol);
 
-        void send_fin(uint32_t stream_id);
+        void send_fin(uint32_t stream_id, Protocol protocol);
 
-        void send_udp_syn(uint32_t stream_id);
+        /* void send_udp_syn(uint32_t stream_id);
 
         void send_udp_synack(uint32_t stream_id, bool ok);
 
-        void send_udp_fin(uint32_t stream_id);
+        void send_udp_fin(uint32_t stream_id); */
 
-        void send_udp(uint32_t stream_id, const std::string &host, uint16_t port,
-                      const std::vector<uint8_t> &data);
+        /* void send_udp(uint32_t stream_id, const std::string &host, uint16_t port,
+                      const std::vector<uint8_t> &data); */
 
-        void send_http_syn(uint32_t stream_id, const std::string &host, uint16_t port);
+        /* void send_http_syn(uint32_t stream_id, const std::string &host, uint16_t port);
 
         void send_http_fin(uint32_t stream_id);
 
         void send_http_synack(uint32_t stream_id, bool ok);
 
-        void send_http_data(uint32_t stream_id, const uint8_t *data, size_t len);
+        void send_http_data(uint32_t stream_id, const uint8_t *data, size_t len); */
 
-        void send_data_ctrl(uint32_t stream_id, CtrlType type);
+        void send_data_ctrl(uint32_t stream_id, CtrlType type, Protocol protocol);
 
     private:
         SessionManager session_manager_;
         SendFunc send_func_;
         uint32_t peer_conn_id_;
         SynHandler on_syn_;
-        UdpSynHandler on_udp_syn_;
-        HttpSynHandler on_http_syn_;
+        /* UdpSynHandler on_udp_syn_;
+        HttpSynHandler on_http_syn_; */
     };
 
 } // namespace p2psocks

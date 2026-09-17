@@ -18,6 +18,17 @@
 
 namespace p2psocks
 {
+    enum class WriteQueueStatus : uint8_t
+    {
+        Danger,
+        Safety
+    };
+
+    enum class CtrlType : uint8_t
+    {
+        receive,
+        pause,
+    };
 
     enum class FrameType : uint8_t
     {
@@ -25,15 +36,33 @@ namespace p2psocks
         SYNACK = 0x02,     // 连接结果, payload = 1字节状态(0=成功,1=失败)
         DATA = 0x03,       // 数据, payload = 原始字节
         FIN = 0x04,        // 关闭该会话, payload 为空
-        UDP_SYN = 0x05,    // UDP 连接请求, payload = host_len(1)+host+port(2)
+        /*UDP_SYN = 0x05,    // UDP 连接请求, payload = host_len(1)+host+port(2)
         UDP_SYNACK = 0x06, // UDP 连接结果, payload = 1字节状态(0=成功,1=失败)
         UDP_FIN = 0x07,    // UDP 关闭该会话, payload 为空
         UDP_DATA = 0x08,   // UDP 数据, payload = 原始字节
         HTTP_SYN = 0x09,  // HTTP 连接请求, payload = host_len(1)+host+port(2)
         HTTP_SYNACK = 0x0A, // HTTP 连接结果, payload = 1字节状态(0=成功,1=失败)
         HTTP_FIN = 0x0B,   // HTTP 关闭该会话, payload 为空
-        HTTP_DATA = 0x0C,  // HTTP 数据, payload = 原始字节
+        HTTP_DATA = 0x0C,  // HTTP 数据, payload = 原始字节*/
         DATA_CTRL = 0x0D, // 数据控制, payload = 1字节类型(0=接收,1=暂停)
+    };
+
+    enum class Protocol: uint8_t {
+        Unknown, Socks5Connect, HttpPlain, HttpsConnect, UdpAssociate 
+        };
+
+    enum class Phase {
+        WaitGreetingVersion,   // 判断走 socks5 还是明文 http/https(no, 明文http走request line)
+        WaitSocksMethods,
+        WaitSocksTCP,
+        WaitSocksUDP,
+        WaitSocksIpv4,
+        WaitSocksDomain,
+        WaitSocksUdpAddr,
+        WaitHttpRequestHeaders,  // 明文 HTTP：喂给 http_request_parser_ 直到 headers complete
+        Connecting,         // 已发起连接请求，等待 synack
+        Connected,
+        Closed
     };
 
     struct SendData
@@ -47,8 +76,8 @@ namespace p2psocks
     {
         uint32_t stream_id;
         FrameType type;
-
-        static constexpr size_t kSize = 5;
+        Protocol protocol;
+        static constexpr size_t kSize = 6;
 
         void encode(uint8_t *out) const;
 
@@ -58,9 +87,9 @@ namespace p2psocks
     };
 
     // 拼一个完整帧: header + payload
-    std::vector<uint8_t> make_frame(uint32_t stream_id, FrameType type,
-                                           const uint8_t *payload = nullptr,
-                                           size_t payload_len = 0);
+    std::vector<uint8_t> make_frame(uint32_t stream_id, FrameType type,Protocol protocol,
+                                    const uint8_t *payload=nullptr,
+                                    size_t payload_len=0);
 
     std::vector<uint8_t> encode_syn_payload(const std::string &host,
                                                    uint16_t port);
@@ -77,7 +106,7 @@ namespace p2psocks
     // ------------------------------------------------------------
     std::vector<uint8_t> encode_udp_payload(
         const std::string &host, uint16_t port,
-        const std::vector<uint8_t> &data);
+        const uint8_t *data,size_t data_len);
 
     // ------------------------------------------------------------
     // 解包
@@ -101,5 +130,7 @@ namespace p2psocks
     // ---------- 解包：从原始字节中取出 len + payload ----------
     // 返回 std::nullopt 表示数据不合法
     std::optional<UnpackedMessage> unpackMessage(const std::byte *data, size_t size);
+
+    std::string ToOriginForm(const std::string &target);
 
 } // namespace p2psocks

@@ -1,15 +1,17 @@
 #include "udp_session.h"
 #include <plog/Log.h>
 #include <asio.hpp>
+#include <session_protocol.h>
 
 using asio::ip::udp;
 using SessionMux = p2psocks::SessionMux;
 using Session = p2psocks::Session;
 
-UdpSession::UdpSession(asio::io_context &io_context, SessionMux &mux, std::shared_ptr<Session> session, uint32_t session_id)
-    : io_(io_context), mux_(mux), session_(session), recv_buf_(65535), socket_(io_context), session_id_(session_id)
+UdpSession::UdpSession(asio::io_context &io_context, SessionMux &mux, uint32_t session_id)
+    : io_(io_context), mux_(mux), socket_(std::make_shared<UdpSocket>(io_context)), session_id_(session_id)
 {
-    PLOG_DEBUG << "UdpSession created, session_id: " << session_id;
+    PLOG_DEBUG << "UdpSession created, session_id: " << session_id_;
+    
 }
 
 UdpSession::~UdpSession()
@@ -20,45 +22,70 @@ UdpSession::~UdpSession()
 void UdpSession::close()
 {
     PLOG_DEBUG << "UdpSession close, session_id: " << session_id_;
-    socket_.close();
+    if (socket_)
+    {
+        socket_->close();
+    }
 }
 
 bool UdpSession::start()
 {
-    asio::error_code ec;
+    auto self = shared_from_this();
+    socket_->setCloseCallback([this,self]()
+                              { PLOG_DEBUG << "UdpSession close session_id:" << session_id_;
+                                socket_.reset();
+                              });
+    socket_->setDataCallback([this,self](const std::string &remote_host, uint16_t remote_port, const uint8_t *d, size_t n)
+                             {
+        if (!client_known_)
+            {
+                remote_ip_ = remote_host;
+                remote_port_ = remote_port;
+                client_known_ = true;
+                PLOG_INFO << "first packet, record client endpoint stream_id:" << session_id_ << " " << remote_ip_ << ":" << remote_port_;
+            }
+            else if (remote_host != remote_ip_)
+            {
+                PLOG_WARNING << "source ip changed, reject packet stream_id:" << session_id_;
+                remote_ip_ = remote_host;
+                return;
+            }
+            else if (remote_port != remote_port_)
+            {
+                PLOG_INFO << "port changed, update client endpoint stream_id:" << session_id_;
+                remote_port_ = remote_port;
+            }
+        send_p2p_data(d, n); });
+    socket_->setWriteQueueCallback([this,self](p2psocks::WriteQueueStatus queue)
+                                   { 
+                                    p2psocks::CtrlType type = p2psocks::CtrlType::pause;
+                                    if(queue == p2psocks::WriteQueueStatus::Danger)
+                                    {
+                                        type = p2psocks::CtrlType::pause;
+                                    }
+                                    else
+                                    {
+                                        type = p2psocks::CtrlType::receive;
+                                    }
+                                    mux_.send_data_ctrl(session_id_, type, protocol_); });
+    socket_->setOpenCallback([this,self](bool success)
+                                { mux_.send_synack(session_id_,success, protocol_); });
+    socket_->start();
+    PLOG_DEBUG << "UDP server listening on port " << socket_->getLocalPort() << ", session_id: " << session_id_;
+    return true;
+}
 
-    socket_.open(udp::v4(), ec);
-    if (ec)
+void UdpSession::revP2pData(const uint8_t *d, size_t n)
+{
+    std::string host;
+    uint16_t port;
+    std::shared_ptr<std::vector<uint8_t>> data = nullptr;
+    if (!p2psocks::decode_udp_payload(d, n, host, port, data))
     {
-        PLOG_ERROR
-            << "open failed:"
-            << ec.message()
-            << ", session_id: " << session_id_;
-        return false;
-    }
-    socket_.bind(udp::endpoint(udp::v4(), 0), ec);
-    if (ec)
-    {
-        PLOG_ERROR
-            << "bind failed:"
-            << ec.message()
-            << ", session_id: " << session_id_;
-        return false;
-    }
-
-    PLOG_DEBUG << "UDP server listening on port " << socket_.local_endpoint().port() << ", session_id: " << session_id_;
-
-    std::weak_ptr<UdpSession> weak_self = shared_from_this();
-
-    session_->set_on_udp_data([weak_self](const std::string &host, uint16_t port,
-                                          std::shared_ptr<std::vector<uint8_t>> data)
-                              {
-    if (weak_self.expired())
-    {
-        PLOG_WARNING << "set_on_udp_data UdpSession expired";
+        PLOG_ERROR << "decode_udp_payload failed, session_id: " << session_id_;
         return;
     }
-    auto self = weak_self.lock();
+
     auto reply = std::make_shared<std::vector<uint8_t>>();
 
     reply->push_back(0x00);
@@ -79,165 +106,86 @@ bool UdpSession::start()
     reply->push_back(port & 0xff);
 
     reply->insert(reply->end(), data->begin(), data->end());
-    
-    self->send(reply); });
 
-    start_receive();
-    return true;
+    socket_->send(reply,remote_ip_,remote_port_);
 }
 
 int UdpSession::getLocalPort()
 {
-    return socket_.local_endpoint().port();
+    return socket_->getLocalPort();
 }
 
 std::string UdpSession::get_local_ip()
 {
-    asio::ip::udp::socket sock(io_);
-    sock.open(asio::ip::udp::v4());
-
-    sock.connect(
-        asio::ip::udp::endpoint(
-            asio::ip::make_address("114.114.114.114"),
-            53));
-
-    return sock.local_endpoint().address().to_string();
+    return socket_->get_local_ip();
 }
 
-void UdpSession::start_receive()
+void UdpSession::p2p_data_ctrl(p2psocks::CtrlType ctrl)
 {
-    auto self(shared_from_this());
-    socket_.async_receive_from(
-        asio::buffer(recv_buf_), remote_endpoint_,
-        [self](std::error_code ec, std::size_t bytes_recvd)
-        {
-            if (ec)
-            {
-                PLOG_ERROR << "receive error: " << ec.message();
-                return;
-            }
-
-            if (bytes_recvd <= 0)
-            {
-                PLOG_WARNING << "invalid packet bytes_recvd <= 0, stream_id:" << self->session_->stream_id();
-                return;
-            }
-
-            if (!self->client_known_)
-            {
-                self->client_endpoint_ = self->remote_endpoint_;
-                self->client_known_ = true;
-                PLOG_INFO << "first packet, record client endpoint stream_id:" << self->session_->stream_id() << " " << self->client_endpoint_.address().to_string() << ":" << self->client_endpoint_.port();
-            }
-            else if (self->remote_endpoint_.address() != self->client_endpoint_.address())
-            {
-                PLOG_WARNING << "source ip changed, reject packet stream_id:" << self->session_->stream_id();
-                self->start_receive();
-                return;
-            }
-            else if (self->remote_endpoint_.port() != self->client_endpoint_.port())
-            {
-                PLOG_INFO << "port changed, update client endpoint stream_id:" << self->session_->stream_id();
-                self->client_endpoint_ = self->remote_endpoint_;
-            }
-
-            if (self->recv_buf_[3] == 0x01)
-            {
-                self->send_ipv4(bytes_recvd, self->remote_endpoint_.address().to_string(), self->remote_endpoint_.port());
-            }
-            else if (self->recv_buf_[3] == 0x03)
-            {
-                self->send_domain(bytes_recvd, self->remote_endpoint_.address().to_string(), self->remote_endpoint_.port());
-            }
-            else
-            {
-                PLOG_ERROR << "invalid network type stream_id:" << self->session_->stream_id();
-            }
-            self->start_receive();
-        });
-}
-
-void UdpSession::send_ipv4(std::size_t bytes_recvd, const std::string &local_host, uint16_t local_port)
-{
-    if (bytes_recvd < 10)
+    switch (ctrl)
     {
-        PLOG_WARNING << "invalid ipv4 packet stream_id:" << session_->stream_id();
+    case p2psocks::CtrlType::pause:
+        socket_->stopReading();
+        break;
+    case p2psocks::CtrlType::receive:
+        socket_->startReading();
+        break;
+    default:
+        break;
+    }
+}
+
+void UdpSession::send_p2p_data(const uint8_t *d, size_t n)
+{
+    if (d[3] == 0x01)
+    {
+        send_ipv4(d, n);
+    }
+    else if (d[3] == 0x03)
+    {
+        send_domain(d, n);
+    }
+    else
+    {
+        PLOG_ERROR << "invalid network type stream_id:" << session_id_;
+    }
+}
+
+void UdpSession::send_ipv4(const uint8_t *d, size_t n)
+{
+    if (n < 10)
+    {
+        PLOG_WARNING << "invalid ipv4 packet stream_id:" << session_id_;
         return;
     }
     char tmp[32];
-    std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", recv_buf_[4], recv_buf_[5],
-                  recv_buf_[6], recv_buf_[7]);
+    std::snprintf(tmp, sizeof(tmp), "%d.%d.%d.%d", d[4], d[5],
+                  d[6], d[7]);
     std::string target_host = tmp;
-    int target_port = (uint16_t(recv_buf_[8]) << 8) | recv_buf_[9];
-    std::vector<uint8_t> data(recv_buf_.begin() + 10, recv_buf_.begin() + bytes_recvd);
+    int target_port = (uint16_t(d[8]) << 8) | d[9];
 
-    mux_.send_udp(session_->stream_id(), target_host, target_port, data);
+    auto payload = p2psocks::encode_udp_payload(target_host, target_port, d + 10, n - 10);
+
+    mux_.send_data(session_id_, payload.data(), payload.size(), protocol_);
 }
 
-void UdpSession::send_domain(std::size_t bytes_recvd, const std::string &local_host, uint16_t local_port)
+void UdpSession::send_domain(const uint8_t *d, size_t n)
 {
-    if (bytes_recvd < 5)
+    if (n < 5)
     {
-        PLOG_WARNING << "invalid domain packet stream_id:" << session_->stream_id();
+        PLOG_WARNING << "invalid domain packet stream_id:" << session_id_;
         return;
     }
-    int len = recv_buf_[4];
-    if (5 + len + 2 > (int)bytes_recvd)
+    int len = d[4];
+    if (5 + len + 2 > (int)n)
     {
-        PLOG_WARNING << "invalid domain packet 2 stream_id:" << session_->stream_id();
+        PLOG_WARNING << "invalid domain packet 2 stream_id:" << session_id_;
         return;
     }
 
-    std::string target_host(recv_buf_.begin() + 5, recv_buf_.begin() + 5 + len);
-    int target_port = (uint16_t(recv_buf_[6 + len]) << 8) | recv_buf_[7 + len];
-    std::vector<uint8_t> data(recv_buf_.begin() + 8 + len, recv_buf_.begin() + bytes_recvd);
+    std::string target_host(d + 5, d + 5 + len);
+    int target_port = (uint16_t(d[6 + len]) << 8) | d[7 + len];
 
-    mux_.send_udp(session_->stream_id(), target_host, target_port, data);
-}
-
-void UdpSession::send(std::shared_ptr<std::vector<uint8_t>> data)
-{
-    send_queue_.push_back(std::move(data));
-    if (!sending_)
-    {
-        sending_ = true;
-        do_send_next();
-    }
-}
-
-void UdpSession::do_send_next()
-{
-    auto data = send_queue_.front();
-    auto self = shared_from_this();
-    socket_.async_send_to(
-        asio::buffer(*data),
-        client_endpoint_,
-        [self](std::error_code ec, std::size_t bytes_sent)
-        {
-            if (ec)
-            {
-                PLOG_ERROR << "send error: "
-                           << ec.message() << " stream_id:" << self->session_->stream_id();
-                return;
-            }
-            self->send_queue_.pop_front();
-
-            if (self->send_queue_.size() > 1000)
-            {
-                self->mux_.send_data_ctrl(self->session_->stream_id(), p2psocks::CtrlType::pause);
-            }
-            else if (self->send_queue_.size() < 200)
-            {
-                self->mux_.send_data_ctrl(self->session_->stream_id(), p2psocks::CtrlType::receive);
-            }
-
-            if (!self->send_queue_.empty())
-            {
-                self->do_send_next();
-            }
-            else
-            {
-                self->sending_ = false;
-            }
-        });
+    auto payload = p2psocks::encode_udp_payload(target_host, target_port, d + 8 + len, n - 8 - len);
+    mux_.send_data(session_id_, payload.data(), payload.size(), protocol_);
 }

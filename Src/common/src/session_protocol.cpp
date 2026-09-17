@@ -1,6 +1,8 @@
 #include "session_protocol.h"
 #include <cstring>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 
 namespace p2psocks
 {
@@ -10,6 +12,7 @@ namespace p2psocks
         uint32_t sid = hton32(stream_id);
         std::memcpy(out, &sid, 4);
         out[4] = static_cast<uint8_t>(type);
+        out[5] = static_cast<uint8_t>(protocol);
     }
 
     bool FrameHeader::decode(const uint8_t *data, size_t len, FrameHeader &h)
@@ -20,6 +23,7 @@ namespace p2psocks
         std::memcpy(&sid, data, 4);
         h.stream_id = hton32(sid);
         h.type = static_cast<FrameType>(data[4]);
+        h.protocol = static_cast<Protocol>(data[5]);
         return true;
     }
 
@@ -29,12 +33,12 @@ namespace p2psocks
                ((v & 0x00FF0000u) >> 8) | ((v & 0xFF000000u) >> 24);
     }
 
-    std::vector<uint8_t> make_frame(uint32_t stream_id, FrameType type,
+    std::vector<uint8_t> make_frame(uint32_t stream_id, FrameType type, Protocol protocol,
                                     const uint8_t *payload,
                                     size_t payload_len)
     {
         std::vector<uint8_t> buf(FrameHeader::kSize + payload_len);
-        FrameHeader h{stream_id, type};
+        FrameHeader h{stream_id, type, protocol};
         h.encode(buf.data());
         if (payload_len)
             std::memcpy(buf.data() + FrameHeader::kSize, payload, payload_len);
@@ -67,12 +71,12 @@ namespace p2psocks
 
     std::vector<uint8_t> encode_udp_payload(
         const std::string &host, uint16_t port,
-        const std::vector<uint8_t> &data)
+        const uint8_t *data, size_t data_len)
     {
 
         std::vector<uint8_t> out;
         out.reserve(1 + host.size() + 2 +
-                    4 + data.size());
+                    4 + data_len);
 
         out.push_back(static_cast<uint8_t>(host.size()));
         out.insert(out.end(), host.begin(), host.end());
@@ -80,13 +84,13 @@ namespace p2psocks
         out.push_back(static_cast<uint8_t>(port >> 8));
         out.push_back(static_cast<uint8_t>(port & 0xFF));
 
-        uint32_t dlen = static_cast<uint32_t>(data.size());
+        uint32_t dlen = static_cast<uint32_t>(data_len);
         out.push_back(static_cast<uint8_t>((dlen >> 24) & 0xFF));
         out.push_back(static_cast<uint8_t>((dlen >> 16) & 0xFF));
         out.push_back(static_cast<uint8_t>((dlen >> 8) & 0xFF));
         out.push_back(static_cast<uint8_t>(dlen & 0xFF));
 
-        out.insert(out.end(), data.begin(), data.end());
+        out.insert(out.end(), data, data + data_len);
 
         return out;
     }
@@ -96,9 +100,9 @@ namespace p2psocks
         size_t len,
         std::string &host,
         uint16_t &port,
-        std::shared_ptr<std::vector<uint8_t>>& data)
+        std::shared_ptr<std::vector<uint8_t>> &data)
     {
-        if(!data)
+        if (!data)
         {
             data = std::make_shared<std::vector<uint8_t>>();
         }
@@ -176,6 +180,58 @@ namespace p2psocks
 
         const uint8_t *payload = reinterpret_cast<const uint8_t *>(data) + 4;
         return UnpackedMessage{payload, len};
+    }
+
+
+
+    std::string ToOriginForm(const std::string &target)
+    {
+        if (target.empty())
+        {
+            return "/";
+        }
+
+        // 已经是 origin-form
+        if (target[0] == '/')
+        {
+            return target;
+        }
+
+        const std::string http = "http://";
+        const std::string https = "https://";
+
+        size_t pos = std::string::npos;
+
+        if (target.compare(0, http.size(), http) == 0)
+        {
+            pos = http.size();
+        }
+        else if (target.compare(0, https.size(), https) == 0)
+        {
+            pos = https.size();
+        }
+        else
+        {
+            // 不是 http:// 或 https://
+            // 不要擅自修改
+            return target;
+        }
+
+        // 跳过：
+        // http://example.com
+        // http://example.com:8080
+        // 找到路径开始的位置
+        pos = target.find('/', pos);
+
+        if (pos == std::string::npos)
+        {
+            // 例如：
+            // http://example.com
+            // http://example.com:8080
+            return "/";
+        }
+
+        return target.substr(pos);
     }
 
 } // namespace p2psocks

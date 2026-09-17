@@ -5,6 +5,8 @@
 #include "rtc_logger.h"
 #include "network_rtc_app.h"
 
+#include "crash_dump.h"
+
 std::atomic<bool> running{true};
 void signal_handler(int signal)
 {
@@ -35,6 +37,8 @@ void input_keyboard()
 
 int main(int argc, char *argv[])
 {
+    CrashDump::InstallCrashHandler("");
+
     RtcLogger::instance().init("rtc_client.log");
 
     std::signal(SIGINT, signal_handler);
@@ -63,14 +67,15 @@ int main(int argc, char *argv[])
     {
         io_threads.emplace_back([&io]()
                                 {
-            try
+            io.run();
+            /* try
             {
                 io.run();
             }
             catch (const std::exception &e)
             {
                 PLOG_ERROR << "io thread exception: " << e.what();
-            } });
+            } */ });
     }
 
     NetworkRtcApp::Config config;
