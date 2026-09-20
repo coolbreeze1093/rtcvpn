@@ -7,7 +7,7 @@
 using json = nlohmann::json;
 
 // 只负责 PeerConnection / DataChannel，不知道信令是怎么传输的
-class P2PClient
+class P2PClient : public std::enable_shared_from_this<P2PClient>
 {
 public:
     using BinaryMessageCallback = std::function<void(rtc::binary)>;
@@ -20,8 +20,9 @@ public:
     // 外部信令收到消息后调用此接口喂给 P2PClient 处理
     void handleSignalMessage(const json &message);
 
-    // 首次协商发起：创建 PeerConnection + DataChannel 并开始 offer 流程
-    void start();
+    void createPeerConnection();
+
+    void createDataChannel(const std::string & label);
 
     void send(rtc::message_variant message);
     void send(const std::byte *data, size_t size);
@@ -33,9 +34,10 @@ public:
     void onStateChange(StateCallback callback)            { state_change_callback_ = std::move(callback); }
 
 private:
-    void createDataChannel();
-    void createPeerConnection();
-
+    void createDataChannelPrivate(const std::string & label);
+    void createDataChannelPrivate(std::shared_ptr<rtc::DataChannel> dc);
+    void bindDataChannel();
+    
     std::shared_ptr<rtc::DataChannel> dc_;
     std::shared_ptr<rtc::PeerConnection> pc_;
     rtc::Configuration p2p_config_;

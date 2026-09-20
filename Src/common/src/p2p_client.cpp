@@ -6,10 +6,9 @@ void P2PClient::init(rtc::Configuration config)
     p2p_config_ = config;
 }
 
-void P2PClient::start()
+void P2PClient::createDataChannel(const std::string & label)
 {
-    createPeerConnection();
-    createDataChannel();
+    createDataChannelPrivate(label);
 }
 
 void P2PClient::handleSignalMessage(const json &message_json)
@@ -93,36 +92,46 @@ void P2PClient::close()
     }
 }
 
-void P2PClient::createDataChannel()
+void P2PClient::bindDataChannel()
+{
+    dc_->onOpen([this]()
+                { PLOG_DEBUG << "DataChannel opened" << "max message size: " << dc_->maxMessageSize(); });
+
+    dc_->onClosed([]()
+                  { PLOG_INFO << "DataChannel closed"; });
+
+    dc_->onError([](std::string message)
+                 { PLOG_ERROR << "DataChannel error: " << message; });
+
+    dc_->onMessage(
+        [this](rtc::binary message)
+        {
+            if (data_channel_binary_callback_)
+                data_channel_binary_callback_(message);
+            else
+                PLOG_INFO << "rev Data data_channel_binary_callback_ is null";
+        },
+        [](std::string message)
+        { PLOG_INFO << "DataChannel message: " << message; });
+}
+
+void P2PClient::createDataChannelPrivate(const std::string & label)
 {
     try
     {
-        dc_ = pc_->createDataChannel("data");
-
-        dc_->onOpen([this]()
-                    { PLOG_DEBUG << "DataChannel opened" << "max message size: " << dc_->maxMessageSize(); });
-
-        dc_->onClosed([]()
-                      { PLOG_INFO << "DataChannel closed"; });
-
-        dc_->onError([](std::string message)
-                     { PLOG_ERROR << "DataChannel error: " << message; });
-
-        dc_->onMessage(
-            [this](rtc::binary message)
-            {
-                if (data_channel_binary_callback_)
-                    data_channel_binary_callback_(message);
-                else
-                    PLOG_INFO << "rev Data data_channel_binary_callback_ is null";
-            },
-            [](std::string message)
-            { PLOG_INFO << "DataChannel message: " << message; });
+        dc_ = pc_->createDataChannel(label);
+        bindDataChannel();
     }
     catch (const std::exception &e)
     {
         PLOG_ERROR << "P2PClient: createDataChannel: " << e.what();
     }
+}
+
+void P2PClient::createDataChannelPrivate(std::shared_ptr<rtc::DataChannel> dc)
+{
+    dc_ = dc;
+    bindDataChannel();
 }
 
 void P2PClient::createPeerConnection()
@@ -158,6 +167,11 @@ void P2PClient::createPeerConnection()
         PLOG_INFO << "Local description: " << description;
         if (signal_out_callback_)
             signal_out_callback_(j); });
+
+        pc_->onDataChannel([this](std::shared_ptr<rtc::DataChannel> data_channel)
+                           {
+        PLOG_INFO << "DataChannel opened" << "max message size: " << data_channel->maxMessageSize();
+        createDataChannelPrivate(data_channel); });
     }
     catch (const std::exception &e)
     {

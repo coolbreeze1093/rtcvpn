@@ -48,7 +48,9 @@ int main(int argc, char *argv[])
     rtc::InitLogger(rtc::LogLevel::Debug, rtcLogCallback);
 
     std::string password_ = "test";
-    std::string signaling_url_ = "ws://localhost:8080";
+    //std::string signaling_url_ = "ws://localhost:8080";
+    std::string signaling_url_ = "ws://69uw05059ab8.vicp.fun:80";
+
     uint16_t socks5_server_port = 10801;
     std::string stun_url_ = "stun.miwifi.com:3478";
     std::vector<std::pair<std::string, uint16_t>> stun_servers = {

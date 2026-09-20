@@ -4,6 +4,7 @@ TunnelSession::TunnelSession(asio::io_context &io, SessionMux &mux,
                              uint32_t stream_id, Protocol protocol)
     : io_(io), mux_(mux), stream_id_(stream_id), protocol_(protocol)
 {
+    PLOG_DEBUG << "TunnelSession::TunnelSession stream_id=" << stream_id_;
     switch (protocol_)
     {
     case Protocol::HttpPlain:
@@ -24,7 +25,7 @@ TunnelSession::TunnelSession(asio::io_context &io, SessionMux &mux,
 
 TunnelSession::~TunnelSession()
 {
-    mux_.remove_session(stream_id_);
+    PLOG_DEBUG << "TunnelSession::~ stream_id=" << stream_id_;
 }
 
 void TunnelSession::init()
@@ -39,7 +40,10 @@ void TunnelSession::init()
         self->p2p_revData(d, n, protocol); });
     session_->set_on_close([this,self](Protocol protocol)
                            {
-        self->close(); });
+                            PLOG_DEBUG << "rev p2p close stream_id=" << stream_id_;
+        self->close(); 
+    
+    });
     session_->set_on_data_ctrl([this,self](CtrlType ctrl, Protocol protocol)
                                {
         self->p2p_revCtrl(ctrl, protocol); });
@@ -67,9 +71,11 @@ void TunnelSession::init()
 
     session_interface_->bind_send_finish([this,self]()
                                          {
+        PLOG_DEBUG << "send p2p fin stream_id=" << stream_id_;
         mux_.send_fin(stream_id_,protocol_); });
     session_interface_->bind_send_sync([this,self](bool success)
                                        {
+        PLOG_DEBUG << "send p2p synack stream_id=" << stream_id_ << " success=" << success;
         mux_.send_synack(stream_id_,success,protocol_); });
 }
 

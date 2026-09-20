@@ -17,6 +17,8 @@ public:
     using ErrorCallback   = std::function<void(const std::string &error)>;
 
     void connect(const std::string &url);
+    void connect(std::shared_ptr<rtc::WebSocket> ws);
+
     void disconnect();
 
     // 发送任意信令 json（由 P2PClient 通过回调传入的内容转发）

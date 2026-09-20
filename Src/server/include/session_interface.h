@@ -11,7 +11,12 @@ class SessionInterface
     using SendDataCtrlFunc = std::function<void(p2psocks::CtrlType ctrl)>;
 
 public:
-    virtual ~SessionInterface() = default;
+    SessionInterface(){
+        PLOG_DEBUG << "SessionInterface::SessionInterface";
+    };
+    virtual ~SessionInterface(){
+        PLOG_DEBUG << "SessionInterface::~SessionInterface";
+    };
     virtual void stop(){
         is_p2p_closed_ = true;
         close();

@@ -8,6 +8,12 @@ void SignalingClient::connect(const std::string &url)
     ws_->open(url);
 }
 
+void SignalingClient::connect(std::shared_ptr<rtc::WebSocket> ws)
+{
+    ws_ = std::move(ws);
+    bindWebSocket();
+}
+
 void SignalingClient::disconnect()
 {
     if (ws_)

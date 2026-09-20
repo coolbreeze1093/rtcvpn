@@ -1,0 +1,2 @@
+
+start chrome --user-data-dir="C:\ChromeProxy" --proxy-server="http://127.0.0.1:10801" --new-window

@@ -201,6 +201,10 @@ void Socks5Session::consume_pending(const uint8_t *data, size_t len)
            phase_ != Phase::Connecting &&
            phase_ != Phase::Connected)
     {
+        if(consumed_len >= len)
+        {
+            break;
+        }
         switch (phase_)
         {
         case Phase::WaitGreetingVersion:
@@ -279,7 +283,7 @@ size_t Socks5Session::handle_socks_methods(const uint8_t *data, size_t len)
         send_socks_reply(0x07);
         return 1;
     }
-    return 1;
+    return 2;
 }
 
 size_t Socks5Session::handle_socks_tcp_udp(const uint8_t *data, size_t len)
@@ -295,7 +299,7 @@ size_t Socks5Session::handle_socks_tcp_udp(const uint8_t *data, size_t len)
         send_socks_reply(0x08);
         phase_ = Phase::Closed;
     }
-    return 1;
+    return 2;
 }
 
 size_t Socks5Session::handle_socks_ipv4(const uint8_t *data, size_t len)
@@ -306,6 +310,7 @@ size_t Socks5Session::handle_socks_ipv4(const uint8_t *data, size_t len)
                   data[6], data[7]);
     target_host_ = tmp;
     target_port_ = (uint16_t(data[8]) << 8) | data[9];
+    PLOG_DEBUG << "SOCKS5 connect request IPv4 address: " << target_host_ << ", port: " << target_port_ << ", session_id: " << session_id_;
     request_remote_connect();
     return 6;
 }
@@ -317,6 +322,7 @@ size_t Socks5Session::handle_socks_domain(const uint8_t *data, size_t len)
     target_host_.assign(data + 5, data + 5 + domain_len);
     target_port_ =
         (uint16_t(data[domain_len + 5]) << 8) | data[domain_len + 6];
+    PLOG_DEBUG << "SOCKS5 connect request domain name: " << target_host_ << ", port: " << target_port_ << ", session_id: " << session_id_;
     request_remote_connect();
     return 3 + domain_len;
 }
@@ -578,6 +584,7 @@ void Socks5Session::close_session()
     if (!is_p2p_closed_ && session_)
     {
         mux_.send_fin(session_->stream_id(), protocol_);
+        PLOG_DEBUG << "Socks5Session send_fin session_id=" << session_id_ << " stream_id=" << session_->stream_id();
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
