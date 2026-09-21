@@ -147,7 +147,7 @@ public:
             } });
     }
 
-    void connect(const std::string &url) { signaling_.connect(url); }
+    void connect(const std::string &url,const rtc::WebSocketConfiguration &config) { signaling_.connect(url,config); }
     void connect(std::shared_ptr<rtc::WebSocket> ws) { signaling_.connect(std::move(ws)); }
     void disconnect() { signaling_.disconnect(); }
 
@@ -156,6 +156,8 @@ public:
     void bindDataChannel(P2PClient::BinaryMessageCallback cb) { p2p_.bindDataChannel(std::move(cb)); }
 
     void onStateChange(OnStateChangeCallback cb) { state_change_callback_ = std::move(cb); }
+
+    void onLoginSuccess(OnLoginSuccessCallback cb) { login_success_callback_ = std::move(cb); }
 
 private:
     SignalingClient signaling_;

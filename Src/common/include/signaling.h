@@ -16,7 +16,7 @@ public:
     using StateCallback   = std::function<void()>;
     using ErrorCallback   = std::function<void(const std::string &error)>;
 
-    void connect(const std::string &url);
+    void connect(const std::string &url,const rtc::WebSocketConfiguration &config);
     void connect(std::shared_ptr<rtc::WebSocket> ws);
 
     void disconnect();

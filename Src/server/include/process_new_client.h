@@ -3,6 +3,7 @@
 #include "session_mux.h"
 #include "tunel_session.h"
 #include "timer.h"
+#include "p2p_session_controller.h"
 
 class Socks5Session : public std::enable_shared_from_this<Socks5Session>
 {
@@ -30,8 +31,10 @@ private:
 
     SessionMux mux_; // 独立的 mux，每个 session 一份
 
-    std::shared_ptr<ws_server> ws_;
-    std::shared_ptr<p2p_server> p2p_;
+    /* std::shared_ptr<ws_server> ws_;
+    std::shared_ptr<p2p_server> p2p_; */
+
+    std::shared_ptr<P2PSessionController> p2p_session_controller_;
 
     std::shared_ptr<Timer> timer_;
 

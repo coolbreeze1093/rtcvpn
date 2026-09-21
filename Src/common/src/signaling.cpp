@@ -1,9 +1,9 @@
 #include "signaling.h"
 #include <plog/Log.h>
 
-void SignalingClient::connect(const std::string &url)
+void SignalingClient::connect(const std::string &url,const rtc::WebSocketConfiguration &config)
 {
-    ws_ = std::make_shared<rtc::WebSocket>();
+    ws_ = std::make_shared<rtc::WebSocket>(config);
     bindWebSocket();
     ws_->open(url);
 }

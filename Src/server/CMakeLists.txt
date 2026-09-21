@@ -15,6 +15,8 @@ add_executable(server
     ${CMAKE_SOURCE_DIR}/Src/common/src/session_id_generator.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/tcp_socket.cpp
     ${CMAKE_SOURCE_DIR}/Src/common/src/udp_socket.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/p2p_client.cpp
+    ${CMAKE_SOURCE_DIR}/Src/common/src/signaling.cpp
     
 )
 

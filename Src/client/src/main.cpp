@@ -4,8 +4,8 @@
 #include <fstream>
 #include "rtc_logger.h"
 #include "network_rtc_app.h"
-
 #include "crash_dump.h"
+
 
 std::atomic<bool> running{true};
 void signal_handler(int signal)
@@ -39,6 +39,7 @@ int main(int argc, char *argv[])
 {
     CrashDump::InstallCrashHandler("");
 
+    auto exec_dir = getExecutableDir();
     RtcLogger::instance().init("rtc_client.log");
 
     std::signal(SIGINT, signal_handler);
@@ -47,17 +48,9 @@ int main(int argc, char *argv[])
     PLOG_INFO << "RTC WebRTC C++";
     rtc::InitLogger(rtc::LogLevel::Debug, rtcLogCallback);
 
-    std::string password_ = "test";
-    //std::string signaling_url_ = "ws://localhost:8080";
-    std::string signaling_url_ = "ws://69uw05059ab8.vicp.fun:80";
-
-    uint16_t socks5_server_port = 10801;
-    std::string stun_url_ = "stun.miwifi.com:3478";
-    std::vector<std::pair<std::string, uint16_t>> stun_servers = {
-        {stun_url_, 3478},
-    };
     uint32_t peer_conn_id = 1;
-    int thread_count = 4;
+    ClientConfig config;
+    readClientConfig(config, exec_dir.string() + "/" + "config.ini");
 
     asio::io_context io;
     // 防止 io.run() 因为暂时没有任务而直接退出
@@ -65,27 +58,20 @@ int main(int argc, char *argv[])
 
     std::vector<std::thread> io_threads;
 
-    for (int i = 0; i < thread_count; i++)
+    for (int i = 0; i < config.asio_thread_count; i++)
     {
         io_threads.emplace_back([&io]()
                                 {
-            io.run();
-            /* try
+            //io.run();
+            try
             {
                 io.run();
             }
             catch (const std::exception &e)
             {
                 PLOG_ERROR << "io thread exception: " << e.what();
-            } */ });
+            } });
     }
-
-    NetworkRtcApp::Config config;
-
-    config.signalingUrl = signaling_url_;
-    config.stunServers = stun_servers;
-    config.password = password_;
-    config.socks5_server_port = socks5_server_port;
 
     NetworkRtcApp app(peer_conn_id,io);
 
