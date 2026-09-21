@@ -14,7 +14,7 @@ struct ClientConfig
     int stun_port = 3478;
 
     // WebSocket
-    std::string ws_server_ip = "ws://69uw05059ab8.vicp.fun:80";
+    std::string ws_server_ip = "ws://127.0.0.1:80";
 
     int ws_max_message_size = 1024 * 1024;
     int ws_connection_timeout = 3000;
@@ -209,7 +209,7 @@ static void readClientConfig(ClientConfig& config, std::string exec_dir)
         ini.GetValue(
             "websocket",
             "server_ip",
-            "ws://69uw05059ab8.vicp.fun:80");
+            "ws://127.0.0.1:80");
 
     config.ws_max_message_size =
         static_cast<int>(ini.GetLongValue(

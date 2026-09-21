@@ -9,7 +9,7 @@ void signal_handler(int signal)
     running = false;
 }
 
-struct Config
+struct ServerConfig
 {
     std::string stun_ip;
     int stun_port = 3478;
@@ -30,34 +30,33 @@ struct Config
     int asio_thread_count = 4;
 };
 
-Config H_config;
-
-void readConfig()
+void readConfig(ServerConfig& config, std::string exec_dir)
 {
     CSimpleIniA ini;
 
     // 允许使用 UTF-8
     ini.SetUnicode();
 
-    if (!std::filesystem::exists("config.ini"))
+    if (!std::filesystem::exists(exec_dir))
     {
         PLOG_WARNING << "config.ini not found, creating default config";
 
-        ini.SetValue("stun", "ip", "127.0.0.1");
-        ini.SetLongValue("stun", "port", 3478);
+        ini.SetValue("stun", "ip", config.stun_ip.c_str());
+        ini.SetLongValue("stun", "port", config.stun_port);
 
-        ini.SetLongValue("websocket", "bind_port", 8080);
-        ini.SetLongValue("websocket", "max_message_size", 1024 * 1024);
-        ini.SetLongValue("websocket", "connection_timeout", 30);
-        ini.SetBoolValue("websocket", "enable_tls", false);
-        ini.SetValue("websocket", "certificate_pem_file", "");
-        ini.SetValue("websocket", "key_pem_file", "");
-        ini.SetValue("websocket", "key_pem_pass", "");
-        ini.SetValue("websocket", "bind_address", "0.0.0.0");
+        ini.SetLongValue("websocket", "bind_port", config.ws_bind_port);
+        ini.SetLongValue("websocket", "max_message_size", config.ws_max_message_size);
+        ini.SetLongValue("websocket", "connection_timeout", config.ws_connection_timeout);
+        ini.SetBoolValue("websocket", "enable_tls", config.ws_enable_tls);
+        ini.SetValue("websocket", "certificate_pem_file", config.ws_certificate_pem_file.c_str());
+        ini.SetValue("websocket", "key_pem_file", config.ws_key_pem_file.c_str());
+        ini.SetValue("websocket", "key_pem_pass", config.ws_key_pem_pass.c_str());
+        ini.SetValue("websocket", "bind_address", config.ws_bind_address.c_str());
 
-        ini.SetValue("server", "password", "");
+        ini.SetValue("server", "password", config.server_password.c_str());
+        ini.SetLongValue("server", "asio_thread_count", config.asio_thread_count);
 
-        SI_Error status = ini.SaveFile("config.ini");
+        SI_Error status = ini.SaveFile(exec_dir.c_str());
 
         if (status != SI_OK)
         {
@@ -79,42 +78,41 @@ void readConfig()
     }
 
     // STUN
-    H_config.stun_ip =
+    config.stun_ip =
         ini.GetValue("stun", "ip", "stun.miwifi.com:3478");
 
-    H_config.stun_port =
+    config.stun_port =
         ini.GetLongValue("stun", "port", 3478);
 
     // WebSocket
-    H_config.ws_bind_port =
+    config.ws_bind_port =
         ini.GetLongValue("websocket", "bind_port", 8080);
 
-    H_config.ws_max_message_size =
+    config.ws_max_message_size =
         ini.GetLongValue("websocket", "max_message_size", 1024 * 1024);
 
-    H_config.ws_connection_timeout =
+    config.ws_connection_timeout =
         ini.GetLongValue("websocket", "connection_timeout", 30);
 
-    H_config.ws_enable_tls =
+    config.ws_enable_tls =
         ini.GetBoolValue("websocket", "enable_tls", false);
 
-    H_config.ws_certificate_pem_file =
+    config.ws_certificate_pem_file =
         ini.GetValue("websocket", "certificate_pem_file", "");
 
-    H_config.ws_key_pem_file =
+    config.ws_key_pem_file =
         ini.GetValue("websocket", "key_pem_file", "");
 
-    H_config.ws_key_pem_pass =
+    config.ws_key_pem_pass =
         ini.GetValue("websocket", "key_pem_pass", "");
 
-    H_config.ws_bind_address =
+    config.ws_bind_address =
         ini.GetValue("websocket", "bind_address", "0.0.0.0");
 
-    // Server
-    H_config.server_password =
+    config.server_password =
         ini.GetValue("server", "password", "");
 
-    H_config.asio_thread_count =
+    config.asio_thread_count =
         ini.GetLongValue("server", "asio_thread_count", 4);
 
     PLOG_INFO << "config loaded successfully";
@@ -127,10 +125,13 @@ int main(int argc, char *argv[])
     std::signal(SIGTERM, signal_handler);
     rtc::InitLogger(rtc::LogLevel::Debug, rtcLogCallback);
     PLOG_INFO << "RTC WebRTC C++ Server Started";
+    ServerConfig server_config;
+    auto exec_dir = getExecutableDir();
+    readConfig(server_config, exec_dir.string() + "/" + "config.ini");
 
     rtc::Configuration config;
     config.iceServers = {
-        {H_config.stun_ip, H_config.stun_port},
+        {server_config.stun_ip, server_config.stun_port},
     };
 
     try
@@ -139,11 +140,11 @@ int main(int argc, char *argv[])
         auto work_guard = asio::make_work_guard(io);
         ProcessNewWsClient processNewWsClient(io, config);
         rtc::WebSocketServerConfiguration ws_config;
-        ws_config.port = H_config.ws_bind_port;
-        ws_config.connectionTimeout = std::chrono::milliseconds(H_config.ws_connection_timeout);
-        ws_config.maxMessageSize = H_config.ws_max_message_size;
-        ws_config.bindAddress = H_config.ws_bind_address;
-        ws_config.enableTls = H_config.ws_enable_tls;
+        ws_config.port = server_config.ws_bind_port;
+        ws_config.connectionTimeout = std::chrono::milliseconds(server_config.ws_connection_timeout);
+        ws_config.maxMessageSize = server_config.ws_max_message_size;
+        ws_config.bindAddress = server_config.ws_bind_address;
+        ws_config.enableTls = server_config.ws_enable_tls;
 
         rtc::WebSocketServer rtc_ws_server(ws_config);
         rtc_ws_server.onClient([&processNewWsClient](std::shared_ptr<rtc::WebSocket> ws)
@@ -155,9 +156,7 @@ int main(int argc, char *argv[])
 
         std::vector<std::thread> io_threads;
 
-        int thread_count = H_config.asio_thread_count;
-
-        for (int i = 0; i < thread_count; i++)
+        for (int i = 0; i < server_config.asio_thread_count; i++)
         {
             io_threads.emplace_back([&io]()
                                     { io.run(); });
