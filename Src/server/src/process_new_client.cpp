@@ -2,7 +2,6 @@
 #include <plog/Log.h>
 #include "tunel_session.h"
 
-
 Socks5Session::Socks5Session(asio::io_context &io,
                              rtc::Configuration &config,
                              uint32_t session_id)
@@ -21,10 +20,10 @@ Socks5Session::~Socks5Session()
     ws_.reset(); */
 }
 
-void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
+void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws, const std::string &passWd)
 {
     p2p_session_controller_->bindDataChannel([this](rtc::binary data)
-                                          {
+                                             {
                           auto result = p2psocks::unpackMessage(data.data(), data.size());
                           if(result)
                           {
@@ -33,10 +32,9 @@ void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
                           else
                           {
                               PLOG_ERROR << "unpackMessage failed";
-                          }
-                      });
+                          } });
     p2p_session_controller_->onStateChange([this](P2PSessionController::State state)
-                                        {
+                                           {
                                             switch(state)
                                             {
                                                 case P2PSessionController::State::Connected:
@@ -47,14 +45,12 @@ void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
                                                     PLOG_DEBUG << "P2PSessionController::State::Closed";
                                                     notifyClose();
                                                     break;
-                                            }
-                                        });
+                                            } });
     p2p_session_controller_->onLoginSuccess([this]()
-                                        {
+                                            {
                                             PLOG_DEBUG << "P2PSessionController::onLoginSuccess";
-                                            onLoginSuccess();
-                                        });
-    p2p_session_controller_->init(config_, "");
+                                            onLoginSuccess(); });
+    p2p_session_controller_->init(config_, passWd);
     p2p_session_controller_->connect(ws);
     /* ws_ = std::make_shared<ws_server>(session_id_);
 
@@ -99,8 +95,7 @@ void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws)
                                 else
                                 {
                                     self->timer_->start(5000);
-                                }
-                            });
+                                } });
 }
 
 void Socks5Session::bindCloseFunc(std::function<void(uint32_t)> cb)
@@ -144,7 +139,7 @@ void Socks5Session::onLoginSuccess()
                 auto self = weak_this.lock();
                 if(self)
                 {
-                    self->mux_.on_p2p_data(1, result->payload, result->len); 
+                    self->mux_.on_p2p_data(1, result->payload, result->len);
                 } });
 
     p2p_->bindCloseFunc([weak_this](uint32_t session_id)
@@ -199,7 +194,7 @@ void Socks5Session::onLoginSuccess()
         } }); */
     auto self = shared_from_this();
     mux_.set_send_func([self, this](uint32_t conn_id, const uint8_t *data, size_t len)
-                        {
+                       {
         try
         {
             //PLOG_DEBUG << "send data, conn_id=" << conn_id << ", size=" << len;
@@ -218,7 +213,7 @@ void Socks5Session::onLoginSuccess()
     // 每个连接自己的 SessionMux，注册自己的 on_syn / on_udp_syn
     mux_.set_on_syn([self, this](uint32_t stream_id,
                                  const std::string &host, uint16_t port, Protocol protocol)
-                     {
+                    {
         
         PLOG_DEBUG << "rev tcp syn " << host << ":" << port
                   << " (stream_id=" << stream_id << ", session=" << self->session_id_ << ")\n";
@@ -234,12 +229,17 @@ void Socks5Session::onLoginSuccess()
 
 void Socks5Session::notifyClose()
 {
-    
+    timer_->start(5000);
 }
 
-ProcessNewWsClient::ProcessNewWsClient(asio::io_context &io, rtc::Configuration config)
-    : io_(io), config_(config)
+ProcessNewWsClient::ProcessNewWsClient(asio::io_context &io, ServerConfig server_config)
+    : io_(io), server_config_(server_config)
 {
+    rtc::Configuration config;
+    config.iceServers = {
+        {server_config.stun_ip, server_config.stun_port},
+    };
+    config_ = config;
     PLOG_DEBUG << "ProcessNewWsClient created";
 }
 
@@ -253,15 +253,15 @@ void ProcessNewWsClient::newClient(std::shared_ptr<rtc::WebSocket> ws)
     uint32_t id = create_session_id();
 
     auto session = std::make_shared<Socks5Session>(io_, config_, id);
+
     session->bindCloseFunc([this](uint32_t session_id)
-                           { 
-                             PLOG_DEBUG << "ProcessNewWsClient remove session::  " << session_id;
-                            client_sessions_.erase(session_id);
-                        
-                        });
+                           {
+                               PLOG_DEBUG << "ProcessNewWsClient remove session::  " << session_id;
+                               client_sessions_.erase(session_id);
+                           });
 
     client_sessions_[id] = session;
-    session->start(ws);
+    session->start(ws, server_config_.server_password);
 
     PLOG_DEBUG << "newClient Socks5Session started  " << id;
 }

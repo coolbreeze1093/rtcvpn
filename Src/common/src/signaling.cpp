@@ -16,14 +16,23 @@ void SignalingClient::connect(std::shared_ptr<rtc::WebSocket> ws)
 
 void SignalingClient::disconnect()
 {
+    PLOG_DEBUG << "SignalingClient disconnect";
     if (ws_)
         ws_->close();
 }
 
 void SignalingClient::send(const json &message)
 {
+
     if (ws_ && ws_->isOpen())
+    {
+        PLOG_DEBUG << "send: " << message.dump();
         ws_->send(message.dump());
+    }
+    else
+    {
+        PLOG_ERROR << "send: WebSocket is not open";
+    }
 }
 
 void SignalingClient::bindWebSocket()
@@ -38,6 +47,7 @@ void SignalingClient::bindWebSocket()
     ws_->onMessage([](rtc::binary) {},
         [this](std::string message)
         {
+            PLOG_INFO << "Received: " << message;
             json message_json;
             try
             {
@@ -54,8 +64,6 @@ void SignalingClient::bindWebSocket()
                 PLOG_ERROR << "Invalid message: no type field";
                 return;
             }
-
-            PLOG_INFO << "Received: " << message;
 
             if (message_callback_)
                 message_callback_(message_json);

@@ -14,10 +14,12 @@ public:
     using OnStateChangeCallback = std::function<void(P2PSessionController::State state)>;
     using OnLoginSuccessCallback = std::function<void()>;
 
-    P2PSessionController() = default;
+    P2PSessionController(){
+        PLOG_DEBUG << "P2PSessionController constructor";
+    };
 
     ~P2PSessionController() {
-
+        PLOG_DEBUG << "P2PSessionController destructor";
     };
 
     void init(rtc::Configuration config, std::string password)
@@ -101,8 +103,11 @@ public:
                                 j["type"] = "verifyACK";
                                 j["result"] = "success";
                                 p2p_.createPeerConnection();
-                                login_success_callback_();
-                                signaling_.send(j.dump());
+                                if(login_success_callback_)
+                                {
+                                    login_success_callback_();
+                                }
+                                signaling_.send(j);
                             }
                             else
                             {
@@ -110,7 +115,7 @@ public:
                                 json j;
                                 j["type"] = "verifyACK";
                                 j["result"] = "failed";
-                                signaling_.send(j.dump());
+                                signaling_.send(j);
                             }
                         }
                         else
@@ -119,7 +124,7 @@ public:
                             json j;
                             j["status"] = "failed";
                             j["type"] = "verifyACK";
-                            signaling_.send(j.dump());
+                            signaling_.send(j);
                         }
             }
             else
@@ -127,12 +132,7 @@ public:
                 p2p_.handleSignalMessage(msg);
             } });
 
-        signaling_.onOpen([this]()
-                          {
-            json verify_msg;
-            verify_msg["type"] = "verify";
-            verify_msg["passwd"] = password_;
-            signaling_.send(verify_msg); });
+        
 
         signaling_.onClosed([this]()
                             {
@@ -147,7 +147,15 @@ public:
             } });
     }
 
-    void connect(const std::string &url,const rtc::WebSocketConfiguration &config) { signaling_.connect(url,config); }
+    void connect(const std::string &url,const rtc::WebSocketConfiguration &config) {signaling_.onOpen([this]()
+                          {
+            json verify_msg;
+            verify_msg["type"] = "verify";
+            verify_msg["passwd"] = password_;
+            signaling_.send(verify_msg); });
+            
+            signaling_.connect(url,config); 
+        }
     void connect(std::shared_ptr<rtc::WebSocket> ws) { signaling_.connect(std::move(ws)); }
     void disconnect() { signaling_.disconnect(); }
 

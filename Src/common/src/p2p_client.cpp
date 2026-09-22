@@ -8,6 +8,7 @@ void P2PClient::init(rtc::Configuration config)
 
 void P2PClient::createDataChannel(const std::string & label)
 {
+    PLOG_DEBUG << "createDataChannel: " << label;
     createDataChannelPrivate(label);
 }
 
@@ -15,7 +16,7 @@ void P2PClient::handleSignalMessage(const json &message_json)
 {
     std::string type = message_json.value("type", "");
 
-    if (type == "answer" || type == "offer")
+    if (type == "description")
     {
         if (message_json.find("description") == message_json.end())
         {
@@ -80,10 +81,10 @@ void P2PClient::close()
 {
     try
     {
-        if (dc_ && dc_->isOpen())
+        if (dc_)
             dc_->close();
 
-        if (pc_ && pc_->state() == rtc::PeerConnection::State::Connected)
+        if (pc_)
             pc_->close();
     }
     catch (const std::exception &e)
@@ -136,6 +137,7 @@ void P2PClient::createDataChannelPrivate(std::shared_ptr<rtc::DataChannel> dc)
 
 void P2PClient::createPeerConnection()
 {
+    PLOG_DEBUG << "**createPeerConnection";
     try
     {
         pc_ = std::make_shared<rtc::PeerConnection>(p2p_config_);
@@ -162,7 +164,7 @@ void P2PClient::createPeerConnection()
         pc_->onLocalDescription([this](rtc::Description description)
                                 {
         json j;
-        j["type"] = "offer";
+        j["type"] = "description";
         j["description"] = description;
         PLOG_INFO << "Local description: " << description;
         if (signal_out_callback_)

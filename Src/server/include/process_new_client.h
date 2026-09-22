@@ -4,6 +4,7 @@
 #include "tunel_session.h"
 #include "timer.h"
 #include "p2p_session_controller.h"
+#include "server_config.h"
 
 class Socks5Session : public std::enable_shared_from_this<Socks5Session>
 {
@@ -14,7 +15,7 @@ public:
 
     ~Socks5Session();
 
-    void start(std::shared_ptr<rtc::WebSocket> ws);
+    void start(std::shared_ptr<rtc::WebSocket> ws,const std::string &passWd);
 
     void bindCloseFunc(std::function<void(uint32_t)> cb);
 
@@ -46,7 +47,7 @@ private:
 class ProcessNewWsClient
 {
 public:
-    ProcessNewWsClient(asio::io_context &io, rtc::Configuration config);
+    ProcessNewWsClient(asio::io_context &io, ServerConfig server_config);
 
     ~ProcessNewWsClient();
 
@@ -60,4 +61,5 @@ private:
 
     std::unordered_map<uint32_t, std::shared_ptr<Socks5Session>> client_sessions_;
     uint32_t id_ = 0;
+    ServerConfig server_config_;
 };
