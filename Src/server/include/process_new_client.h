@@ -34,9 +34,9 @@ private:
     /* std::shared_ptr<ws_server> ws_;
     std::shared_ptr<p2p_server> p2p_; */
 
-    std::shared_ptr<P2PSessionController> p2p_session_controller_;
-
     std::shared_ptr<Timer> timer_;
+
+    std::shared_ptr<P2PSessionController> p2p_session_controller_;
 
     std::unordered_map<uint32_t, std::shared_ptr<TunnelSession>> tunnel_sessions_;
 

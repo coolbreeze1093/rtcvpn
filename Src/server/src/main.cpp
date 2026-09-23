@@ -41,7 +41,7 @@ int main(int argc, char *argv[])
     PLOG_INFO << "RTC WebRTC C++ Server Started";
     ServerConfig server_config;
     auto exec_dir = getExecutableDir();
-    readConfig(server_config, exec_dir.string() + "/" + "config.ini");
+    ServerConfig::readConfig(server_config, exec_dir.string() + "/" + "config.ini");
 
     try
     {

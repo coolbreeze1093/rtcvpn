@@ -50,7 +50,7 @@ int main(int argc, char *argv[])
 
     uint32_t peer_conn_id = 1;
     ClientConfig config;
-    readClientConfig(config, exec_dir.string() + "/" + "config.ini");
+    ClientConfig::readClientConfig(config, exec_dir.string() + "/" + "config.ini");
 
     asio::io_context io;
     // 防止 io.run() 因为暂时没有任务而直接退出

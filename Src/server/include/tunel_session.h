@@ -22,7 +22,7 @@ public:
 
     void close(){
         PLOG_DEBUG << "TunnelSession close  " << stream_id_;
-        session_interface_->close();};
+        session_interface_->stop();};
 
     void bind_close_func(CloseFunc close_func){
         PLOG_DEBUG << "TunnelSession bind_close_func  " << stream_id_;
