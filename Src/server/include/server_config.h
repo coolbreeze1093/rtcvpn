@@ -2,7 +2,7 @@
 #include <string>
 #include <filesystem>
 #include "SimpleIni.h"
-#include "plog/log.h"
+#include <plog/Log.h>
 
 struct ServerConfig
 {
