@@ -10,7 +10,27 @@ void signal_handler(int signal)
     running = false;
 }
 
+void input_keyboard()
+{
+    char c;
 
+    while (running && std::cin.get(c))
+    {
+        if (c == 'q' || c == 'Q')
+        {
+            PLOG_INFO << "input q, exit";
+
+            running = false;
+
+            // 如果 NetworkRtcApp 有 close/stop 方法
+            // app.close();
+            // 或者：
+            // app.stop();
+
+            break;
+        }
+    }
+}
 
 int main(int argc, char *argv[])
 {
@@ -51,13 +71,15 @@ int main(int argc, char *argv[])
                                     { io.run(); });
         }
 
+        input_keyboard();
+
+        work_guard.reset();
+
         for (auto &t : io_threads)
         {
             if (t.joinable())
                 t.join();
         }
-
-        io.stop();
     }
     catch (std::exception &e)
     {
