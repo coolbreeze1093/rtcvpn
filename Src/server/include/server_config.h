@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 #include <filesystem>
-#include "Simpleini.h"
+#include "SimpleIni.h"
 #include "plog/log.h"
 
 struct ServerConfig
