@@ -1,12 +1,16 @@
 #include "process_new_client.h"
 #include <fstream>
 #include <csignal>
+#include <thread>
+#include <chrono>
 #include "rtc_logger.h"
 #include "server_config.h"
+#include "is_std_in_terminal.h"
 
 std::atomic<bool> running{true};
 void signal_handler(int signal)
 {
+    PLOG_INFO << "Received signal " << signal << ", exit";
     running = false;
 }
 
@@ -14,22 +18,26 @@ void input_keyboard()
 {
     char c;
 
-    while (running && std::cin.get(c))
+    while (running)
     {
-        if (c == 'q' || c == 'Q')
+        if (!isStdinTerminal())
         {
-            PLOG_INFO << "input q, exit";
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            continue;
+        }
+        else
+        {
+            std::cin.get(c);
+            if (c == 'q' || c == 'Q')
+            {
+                PLOG_INFO << "input q, exit";
 
-            running = false;
-
-            // 如果 NetworkRtcApp 有 close/stop 方法
-            // app.close();
-            // 或者：
-            // app.stop();
-
-            break;
+                running = false;
+                break;
+            }
         }
     }
+    PLOG_INFO << "input keyboard exit";
 }
 
 int main(int argc, char *argv[])
