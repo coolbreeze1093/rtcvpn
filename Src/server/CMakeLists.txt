@@ -5,7 +5,6 @@ project(server LANGUAGES C CXX)
 add_executable(server
     src/main.cpp
     src/udp_session.cpp
-    src/p2p_server.cpp
     src/tcp_session.cpp
     src/process_new_client.cpp
     src/http_session.cpp

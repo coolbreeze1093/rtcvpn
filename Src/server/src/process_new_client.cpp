@@ -16,182 +16,10 @@ Socks5Session::Socks5Session(asio::io_context &io,
 Socks5Session::~Socks5Session()
 {
     PLOG_DEBUG << "~Socks5Session destroyed  " << session_id_;
-    /* p2p_.reset();
-    ws_.reset(); */
 }
 
 void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws, const std::string &passWd)
 {
-    p2p_session_controller_->bindDataChannel([this](rtc::binary data)
-                                             {
-                          auto result = p2psocks::unpackMessage(data.data(), data.size());
-                          if(result)
-                          {
-                              mux_.on_p2p_data(1, result->payload, result->len);
-                          }
-                          else
-                          {
-                              PLOG_ERROR << "unpackMessage failed";
-                          } });
-    p2p_session_controller_->onStateChange([this](P2PSessionController::State state)
-                                           {
-                                            switch(state)
-                                            {
-                                                case P2PSessionController::State::Connected:
-                                                    PLOG_DEBUG << "P2PSessionController::State::Connected";
-                                                    
-                                                    break;
-                                                case P2PSessionController::State::Closed:
-                                                    PLOG_DEBUG << "P2PSessionController::State::Closed";
-                                                    notifyClose();
-                                                    break;
-                                            } });
-    p2p_session_controller_->onLoginSuccess([this]()
-                                            {
-                                            PLOG_DEBUG << "P2PSessionController::onLoginSuccess";
-                                            onLoginSuccess(); });
-    p2p_session_controller_->init(config_, passWd);
-    p2p_session_controller_->connect(ws);
-    /* ws_ = std::make_shared<ws_server>(session_id_);
-
-    std::weak_ptr<Socks5Session> weak_this = shared_from_this();
-    ws_->bindLoginSuccess([weak_this](uint32_t session_id)
-                          {
-                            if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-        auto self = weak_this.lock();
-        if(self)
-        {
-            self->onLoginSuccess();
-        } });
-
-    ws_->bindCloseFunc([weak_this](uint32_t session_id)
-                       {
-        PLOG_INFO << "websocket closed  " << session_id;
-        if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-        auto self = weak_this.lock();
-        if(self)
-        {
-            self->notifyClose();
-        } });
-
-    ws_->connect(ws); */
-
-    timer_->bindTimerFinish([self = shared_from_this()]()
-                            {
-                                if(self->tunnel_sessions_.empty())
-                                {
-                                    if (self->close_cb_)
-                                        self->close_cb_(self->session_id_);
-                                    self->timer_.reset();
-                                } 
-                                else
-                                {
-                                    self->timer_->start(5000);
-                                } });
-}
-
-void Socks5Session::bindCloseFunc(std::function<void(uint32_t)> cb)
-{
-    close_cb_ = std::move(cb);
-}
-
-uint32_t Socks5Session::id() const { return session_id_; }
-
-void Socks5Session::onLoginSuccess()
-{
-    /* p2p_ = std::make_shared<p2p_server>(session_id_);
-    p2p_->init(config_);
-
-    std::weak_ptr<Socks5Session> weak_this = shared_from_this();
-    p2p_->bindWsSend([weak_this](const std::string &str)
-                     {
-                        if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-        auto self = weak_this.lock();
-        if(self)
-        {
-            self->ws_->send(str);
-        } });
-
-    p2p_->bindDataChannel([weak_this](const rtc::binary &data)
-                          {
-                    auto result = p2psocks::unpackMessage(data.data(), data.size());
-                    if (!result)
-                    {
-                        return;
-                    }
-                    if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-                auto self = weak_this.lock();
-                if(self)
-                {
-                    self->mux_.on_p2p_data(1, result->payload, result->len);
-                } });
-
-    p2p_->bindCloseFunc([weak_this](uint32_t session_id)
-                        {
-                            PLOG_INFO << "p2p closed  " << session_id;
-                            if (weak_this.expired())
-                            {
-                                PLOG_ERROR << "weak_this is expired";
-                                return;
-                            }
-                            auto self = weak_this.lock();
-                            if (!self)
-                            {
-                                PLOG_ERROR << "weak_this is expired";
-                                return;
-                            }
-
-                            for (auto &session : self->tunnel_sessions_)
-                            {
-                                session.second->close();
-                            }
-                            self->ws_->disconnect();
-
-                            self->timer_->start(5000);
-                            // 通知 ws 关闭
-                        });
-
-    ws_->bindsetRemoteDescriptionFunc([weak_this](const std::string &sdp, const std::string &type)
-                                      {
-                                        if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-        auto self = weak_this.lock();
-        if(self)
-        {
-            self->p2p_->setRemoteDescription(sdp, type);
-        } });
-
-    ws_->bindaddRemoteCandidateFunc([weak_this](const std::string &candidate, const std::string &mid)
-                                    {
-                                        if(weak_this.expired())
-        {
-            PLOG_ERROR << "weak_this is expired";
-            return;
-        }
-        auto self = weak_this.lock();
-        if(self)
-        {
-            self->p2p_->addRemoteCandidate(candidate, mid);
-        } }); */
     auto self = shared_from_this();
     mux_.set_send_func([self, this](uint32_t conn_id, const uint8_t *data, size_t len)
                        {
@@ -225,6 +53,66 @@ void Socks5Session::onLoginSuccess()
             self->tunnel_sessions_.erase(stream_id);
         });
         rs->start(host, port); });
+
+    p2p_session_controller_->bindDataChannel([this](rtc::binary data)
+                                             {
+                          auto result = p2psocks::unpackMessage(data.data(), data.size());
+                          if(result)
+                          {
+                              mux_.on_p2p_data(1, result->payload, result->len);
+                          }
+                          else
+                          {
+                              PLOG_ERROR << "unpackMessage failed";
+                          } });
+    p2p_session_controller_->onStateChange([this](P2PSessionController::State state)
+                                           {
+                                            switch(state)
+                                            {
+                                                case P2PSessionController::State::Connected:
+                                                    PLOG_DEBUG << "P2PSessionController::State::Connected";
+                                                    break;
+                                                case P2PSessionController::State::Closed:
+                                                    PLOG_DEBUG << "P2PSessionController::State::Closed";
+                                                    notifyClose();
+                                                    for(auto &rs : tunnel_sessions_)
+                                                    {
+                                                        rs.second->close();
+                                                    }
+                                                    break;
+                                            } });
+    p2p_session_controller_->onLoginSuccess([this]()
+                                            {
+                                            PLOG_DEBUG << "P2PSessionController::onLoginSuccess";
+                                            onLoginSuccess(); });
+    p2p_session_controller_->init(config_, passWd);
+    p2p_session_controller_->connect(ws);
+    
+
+    timer_->bindTimerFinish([self = shared_from_this()]()
+                            {
+                                if(self->tunnel_sessions_.empty())
+                                {
+                                    if (self->close_cb_)
+                                        self->close_cb_(self->session_id_);
+                                    self->timer_.reset();
+                                } 
+                                else
+                                {
+                                    self->timer_->start(5000);
+                                } });
+}
+
+void Socks5Session::bindCloseFunc(std::function<void(uint32_t)> cb)
+{
+    close_cb_ = std::move(cb);
+}
+
+uint32_t Socks5Session::id() const { return session_id_; }
+
+void Socks5Session::onLoginSuccess()
+{
+    
 }
 
 void Socks5Session::notifyClose()

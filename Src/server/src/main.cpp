@@ -1,5 +1,6 @@
 #include "process_new_client.h"
 #include <fstream>
+#include <csignal>
 #include "rtc_logger.h"
 #include "server_config.h"
 
