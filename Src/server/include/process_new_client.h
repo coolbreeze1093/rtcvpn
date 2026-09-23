@@ -20,6 +20,8 @@ public:
 
     uint32_t id() const;
 
+    void stop();
+
 private:
     void onLoginSuccess();
 
@@ -53,6 +55,8 @@ public:
     void newClient(std::shared_ptr<rtc::WebSocket> ws);
 
     uint32_t create_session_id();
+
+    void stop();
 
 private:
     asio::io_context &io_;

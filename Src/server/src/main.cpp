@@ -73,6 +73,10 @@ int main(int argc, char *argv[])
 
         input_keyboard();
 
+        rtc_ws_server.stop();
+
+        processNewWsClient.stop();
+
         work_guard.reset();
 
         for (auto &t : io_threads)

@@ -99,7 +99,7 @@ void Socks5Session::start(std::shared_ptr<rtc::WebSocket> ws, const std::string 
                                 } 
                                 else
                                 {
-                                    self->timer_->start(5000);
+                                    self->timer_->start(1000);
                                 } });
 }
 
@@ -110,6 +110,11 @@ void Socks5Session::bindCloseFunc(std::function<void(uint32_t)> cb)
 
 uint32_t Socks5Session::id() const { return session_id_; }
 
+void Socks5Session::stop()
+{
+    p2p_session_controller_->disconnect();
+}
+
 void Socks5Session::onLoginSuccess()
 {
     
@@ -117,7 +122,7 @@ void Socks5Session::onLoginSuccess()
 
 void Socks5Session::notifyClose()
 {
-    timer_->start(5000);
+    timer_->start(1000);
 }
 
 ProcessNewWsClient::ProcessNewWsClient(asio::io_context &io, ServerConfig server_config)
@@ -159,4 +164,12 @@ uint32_t ProcessNewWsClient::create_session_id()
     if (id_ > 65535)
         id_ = 0;
     return ++id_;
+}
+
+void ProcessNewWsClient::stop()
+{
+    for(auto &session : client_sessions_)
+    {
+        session.second->stop();
+    }
 }
