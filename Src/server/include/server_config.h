@@ -8,11 +8,11 @@
 struct ServerConfig
 {
     std::string stun_ip;
-    int stun_port = 3478;
+    int16_t stun_port = 3478;
 
-    int ws_bind_port = 8080;
-    int ws_max_message_size = 1024 * 1024;
-    int ws_connection_timeout = 30;
+    int16_t ws_bind_port = 8080;
+    int32_t ws_max_message_size = 1024 * 1024;
+    int16_t ws_connection_timeout = 10000;
 
     bool ws_enable_tls = false;
 

@@ -11,17 +11,17 @@ struct ClientConfig
 {
     // STUN
     std::string stun_ip = "stun.miwifi.com";
-    int stun_port = 3478;
+    int16_t stun_port = 3478;
 
     // WebSocket
     std::string ws_server_ip = "ws://127.0.0.1:80";
 
-    int ws_max_message_size = 1024 * 1024;
-    int ws_connection_timeout = 3000;
+    int32_t ws_max_message_size = 1024 * 1024;
+    int16_t ws_connection_timeout = 3000;
     bool ws_enable_tls = false;
     bool ws_disable_tls_verification = false;
-    int ws_max_outstanding_pings = 100;
-    int ws_ping_interval = 3000;
+    int16_t ws_max_outstanding_pings = 100;
+    int16_t ws_ping_interval = 3000;
 
     std::string ws_ca_certificate_pem_file;
     std::string ws_key_pem_file;
@@ -32,13 +32,13 @@ struct ClientConfig
 
     // SOCKS5
     std::string socks5_bind_ip = "0.0.0.0";
-    int socks5_bind_port = 10801;
+    int16_t socks5_bind_port = 10801;
 
     // Server
     std::string server_password;
 
     // ASIO
-    int asio_thread_count = 4;
+    int16_t asio_thread_count = 4;
 };
 
 static void readClientConfig(ClientConfig& config, std::string exec_dir)
